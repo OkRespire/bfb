@@ -1,13 +1,12 @@
 use color_eyre::Result;
-use std::{env, fs::File, path::PathBuf};
+use std::{env, path::PathBuf};
 
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use futures::{FutureExt, StreamExt};
 use ratatui::{
     DefaultTerminal, Frame,
-    style::Style,
     text::Line,
-    widgets::{Block, List, ListItem, ListState, Paragraph},
+    widgets::{Block, List, ListItem, ListState},
 };
 use tokio::fs::read_dir;
 
@@ -28,12 +27,14 @@ pub struct App {
     event_stream: EventStream,
 
     curr_dir: PathBuf,
-    files: Vec<FileEntry>,
+    visible: Vec<FileEntry>,
+    hidden: Vec<FileEntry>,
     selected: usize,
 }
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FileEntry {
     name: String,
+    path: PathBuf,
     is_dir: bool,
 }
 
@@ -55,13 +56,18 @@ async fn get_files(cwd: &PathBuf) -> Result<Vec<FileEntry>> {
     let mut entries = read_dir(cwd).await?;
     let mut files: Vec<FileEntry> = Vec::new();
     while let Some(entry) = entries.next_entry().await? {
-        let is_dir = entry.file_type().await?.is_dir();
         let name = entry.file_name().to_string_lossy().to_string();
-        let fe = FileEntry { name, is_dir };
+        let is_dir = entry.file_type().await?.is_dir();
+        let path = entry.path();
+        let fe = FileEntry { name, is_dir, path };
         files.push(fe)
     }
 
     Ok(files)
+}
+
+fn part_files(files: Vec<FileEntry>) -> (Vec<FileEntry>, Vec<FileEntry>) {
+    files.into_iter().partition(|x| x.name.starts_with('.'))
 }
 
 impl App {
@@ -69,11 +75,13 @@ impl App {
     pub async fn new() -> Result<Self> {
         let curr_dir = env::current_dir().unwrap();
         let files = get_files(&curr_dir).await?;
+        let (hidden, visible) = part_files(files);
         Ok(Self {
             running: true,
             event_stream: EventStream::default(),
             curr_dir,
-            files,
+            visible,
+            hidden,
             selected: 0,
         })
     }
@@ -96,7 +104,7 @@ impl App {
     fn draw(&mut self, frame: &mut Frame) {
         let title = Line::from(self.curr_dir.to_string_lossy().to_string());
         let list_item: Vec<ListItem> = self
-            .files
+            .visible
             .iter()
             .map(|p| -> ListItem<'_> { ListItem::new(format!("{}", p)) })
             .collect();
@@ -112,7 +120,9 @@ impl App {
         let event = self.event_stream.next().fuse().await;
         match event {
             Some(Ok(evt)) => match evt {
-                Event::Key(key) if key.kind == KeyEventKind::Press => self.on_key_event(key),
+                Event::Key(key) if key.kind == KeyEventKind::Press => {
+                    self.on_key_event(key).await?
+                }
                 Event::Mouse(_) => {}
                 Event::Resize(_, _) => {}
                 _ => {}
@@ -122,14 +132,42 @@ impl App {
         Ok(())
     }
 
+    fn set_files(&mut self, files: Vec<FileEntry>) {
+        (self.hidden, self.visible) = part_files(files);
+    }
+
     /// Handles the key events and updates the state of [`App`].
-    fn on_key_event(&mut self, key: KeyEvent) {
+    async fn on_key_event(&mut self, key: KeyEvent) -> Result<()> {
         match (key.modifiers, key.code) {
             (_, KeyCode::Esc | KeyCode::Char('q'))
             | (KeyModifiers::CONTROL, KeyCode::Char('c') | KeyCode::Char('C')) => self.quit(),
-            // Add other key handlers here.
+            (_, KeyCode::Up | KeyCode::Char('k')) => {
+                self.selected = self.selected.saturating_sub(1);
+            }
+            (_, KeyCode::Down | KeyCode::Char('j')) => {
+                self.selected = (self.selected + 1).min(self.visible.len() - 1);
+            }
+            (_, KeyCode::Enter | KeyCode::Char('l') | KeyCode::Right) => {
+                let file = self.visible[self.selected].clone();
+                if file.is_dir {
+                    self.selected = 0;
+                    let files = get_files(&file.path).await?;
+                    self.set_files(files);
+                    self.curr_dir = file.path;
+                }
+            }
+            (_, KeyCode::Backspace | KeyCode::Char('h') | KeyCode::Left) => {
+                if let Some(parent) = &self.curr_dir.parent() {
+                    self.selected = 0;
+                    let files = get_files(&parent.to_path_buf()).await?;
+                    self.curr_dir = parent.to_path_buf();
+                    self.set_files(files);
+                }
+            }
+
             _ => {}
         }
+        Ok(())
     }
 
     /// Set running to false to quit the application.
