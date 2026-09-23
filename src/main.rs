@@ -23,12 +23,14 @@ async fn main() -> Result<()> {
 pub struct App {
     /// Is the application running?
     running: bool,
+    show_hidden: bool,
     // Event stream.
     event_stream: EventStream,
 
     curr_dir: PathBuf,
     visible: Vec<FileEntry>,
     hidden: Vec<FileEntry>,
+    len: usize,
     selected: usize,
 }
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd)]
@@ -54,16 +56,10 @@ impl std::fmt::Display for FileEntry {
 
 impl Ord for FileEntry {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        if !self.is_dir && other.is_dir {
-            std::cmp::Ordering::Greater
-        } else if self.is_dir && !other.is_dir {
-            std::cmp::Ordering::Less
-        } else {
-            if self.name > other.name {
-                std::cmp::Ordering::Greater
-            } else {
-                std::cmp::Ordering::Less
-            }
+        match (self.is_dir, other.is_dir) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => self.name.cmp(&other.name),
         }
     }
 }
@@ -95,8 +91,10 @@ impl App {
         let (hidden, visible) = part_files(files);
         Ok(Self {
             running: true,
+            show_hidden: false,
             event_stream: EventStream::default(),
             curr_dir,
+            len: hidden.len() + visible.len(),
             visible,
             hidden,
             selected: 0,
@@ -112,6 +110,13 @@ impl App {
         }
         Ok(())
     }
+    fn displayed(&self) -> Vec<&FileEntry> {
+        if self.show_hidden {
+            self.hidden.iter().chain(self.visible.iter()).collect()
+        } else {
+            self.visible.iter().collect()
+        }
+    }
 
     /// Renders the user interface.
     ///
@@ -120,11 +125,19 @@ impl App {
     /// - <https://github.com/ratatui/ratatui/tree/master/examples>
     fn draw(&mut self, frame: &mut Frame) {
         let title = Line::from(self.curr_dir.to_string_lossy().to_string());
-        let list_item: Vec<ListItem> = self
-            .visible
-            .iter()
-            .map(|p| -> ListItem<'_> { ListItem::new(format!("{}", p)) })
-            .collect();
+        let list_item: Vec<ListItem> = if self.show_hidden {
+            self.hidden
+                .iter()
+                .chain(self.visible.iter())
+                .map(|p| ListItem::new(format!("{}", p)))
+                .collect()
+        } else {
+            self.visible
+                .iter()
+                .map(|p| -> ListItem<'_> { ListItem::new(format!("{}", p)) })
+                .collect()
+        };
+
         let list: List = List::new(list_item)
             .block(Block::bordered().title(title))
             .highlight_symbol("> ");
@@ -162,14 +175,20 @@ impl App {
                 self.selected = self.selected.saturating_sub(1);
             }
             (_, KeyCode::Down | KeyCode::Char('j')) => {
-                self.selected = (self.selected + 1).min(self.visible.len() - 1);
+                if self.show_hidden {
+                    self.selected = (self.selected + 1).min(self.len - 1);
+                } else {
+                    self.selected = (self.selected + 1).min(self.visible.len() - 1);
+                }
             }
             (_, KeyCode::Enter | KeyCode::Char('l') | KeyCode::Right) => {
-                let file = self.visible[self.selected].clone();
+                let idx = &self.selected;
+                let files = self.displayed();
+                let file = files[*idx].clone();
                 if file.is_dir {
                     self.selected = 0;
-                    let files = get_files(&file.path).await?;
-                    self.set_files(files);
+                    let new_files = get_files(&file.path).await?;
+                    self.set_files(new_files);
                     self.curr_dir = file.path;
                 }
             }
@@ -181,6 +200,7 @@ impl App {
                     self.set_files(files);
                 }
             }
+            (_, KeyCode::Char('.')) => self.show_hidden = !self.show_hidden,
 
             _ => {}
         }
