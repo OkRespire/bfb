@@ -31,7 +31,7 @@ pub struct App {
     hidden: Vec<FileEntry>,
     selected: usize,
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd)]
 pub struct FileEntry {
     name: String,
     path: PathBuf,
@@ -52,6 +52,22 @@ impl std::fmt::Display for FileEntry {
     }
 }
 
+impl Ord for FileEntry {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        if !self.is_dir && other.is_dir {
+            std::cmp::Ordering::Greater
+        } else if self.is_dir && !other.is_dir {
+            std::cmp::Ordering::Less
+        } else {
+            if self.name > other.name {
+                std::cmp::Ordering::Greater
+            } else {
+                std::cmp::Ordering::Less
+            }
+        }
+    }
+}
+
 async fn get_files(cwd: &PathBuf) -> Result<Vec<FileEntry>> {
     let mut entries = read_dir(cwd).await?;
     let mut files: Vec<FileEntry> = Vec::new();
@@ -66,7 +82,8 @@ async fn get_files(cwd: &PathBuf) -> Result<Vec<FileEntry>> {
     Ok(files)
 }
 
-fn part_files(files: Vec<FileEntry>) -> (Vec<FileEntry>, Vec<FileEntry>) {
+fn part_files(mut files: Vec<FileEntry>) -> (Vec<FileEntry>, Vec<FileEntry>) {
+    files.sort_by(|a, b| a.cmp(b));
     files.into_iter().partition(|x| x.name.starts_with('.'))
 }
 
