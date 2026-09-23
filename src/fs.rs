@@ -1,20 +1,51 @@
-use std::{env, fs::File, path::PathBuf};
+use std::{env, path::PathBuf};
 
 use color_eyre::Result;
 use tokio::fs::read_dir;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum EntryType {
+    Directory,
+    File,
+    Symlink,
+}
+
+impl PartialOrd for EntryType {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for EntryType {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        match (self, other) {
+            // Directories come before everything else
+            (EntryType::Directory, EntryType::Directory) => std::cmp::Ordering::Equal,
+            (EntryType::Directory, _) => std::cmp::Ordering::Less,
+            (_, EntryType::Directory) => std::cmp::Ordering::Greater,
+
+            // Files and symlinks have no hierarchy yet
+            (EntryType::File, EntryType::File) => std::cmp::Ordering::Equal,
+            (EntryType::Symlink, EntryType::Symlink) => std::cmp::Ordering::Equal,
+            (EntryType::File, EntryType::Symlink) => std::cmp::Ordering::Equal,
+            (EntryType::Symlink, EntryType::File) => std::cmp::Ordering::Equal,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileEntry {
     pub name: String,
     pub path: PathBuf,
-    pub is_dir: bool,
+    pub ent_type: EntryType,
 }
 
 impl std::fmt::Display for FileEntry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.is_dir {
-            write!(f, "\u{f07b} ")?
-        } else {
-            write!(f, "\u{f15b} ")?
+        match self.ent_type {
+            EntryType::Directory => write!(f, "\u{f07b} ")?,
+            EntryType::File => write!(f, "\u{f15b} ")?,
+            EntryType::Symlink => write!(f, "\u{f504}")?,
         }
 
         writeln!(f, "{}", self.name)?;
@@ -25,9 +56,8 @@ impl std::fmt::Display for FileEntry {
 
 impl Ord for FileEntry {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        other
-            .is_dir
-            .cmp(&self.is_dir)
+        self.ent_type
+            .cmp(&other.ent_type)
             .then_with(|| self.name.cmp(&other.name))
             .then_with(|| self.path.cmp(&other.path))
     }
@@ -77,9 +107,20 @@ pub async fn get_files(cwd: &PathBuf) -> Result<Vec<FileEntry>> {
     let mut files: Vec<FileEntry> = Vec::new();
     while let Some(entry) = entries.next_entry().await? {
         let name = entry.file_name().to_string_lossy().to_string();
-        let is_dir = entry.file_type().await?.is_dir();
+        let entry_ft = entry.file_type().await?;
+        let ent_type = if entry_ft.is_dir() {
+            EntryType::Directory
+        } else if entry_ft.is_file() {
+            EntryType::File
+        } else {
+            EntryType::Symlink
+        };
         let path = entry.path();
-        let fe = FileEntry { name, is_dir, path };
+        let fe = FileEntry {
+            name,
+            ent_type,
+            path,
+        };
         files.push(fe)
     }
 

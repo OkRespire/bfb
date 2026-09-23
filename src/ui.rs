@@ -12,15 +12,16 @@ impl App {
     /// - <https://docs.rs/ratatui/latest/ratatui/widgets/index.html>
     /// - <https://github.com/ratatui/ratatui/tree/master/examples>
     pub fn draw(&mut self, frame: &mut Frame) {
-        let title = Line::from(self.curr_dir.to_string_lossy().to_string());
+        let title = Line::from(self.dir_view.cwd.to_string_lossy().to_string());
         let list_item: Vec<ListItem> = if self.show_hidden {
-            self.hidden
+            self.dir_view
+                .displayed(self.show_hidden)
                 .iter()
-                .chain(self.visible.iter())
                 .map(|p| ListItem::new(format!("{}", p)))
                 .collect()
         } else {
-            self.visible
+            self.dir_view
+                .visible
                 .iter()
                 .map(|p| -> ListItem<'_> { ListItem::new(format!("{}", p)) })
                 .collect()
@@ -29,7 +30,7 @@ impl App {
         let list = List::new(list_item)
             .block(Block::bordered().title(title))
             .highlight_symbol("> ");
-        let mut list_state = ListState::default().with_selected(Some(self.selected));
+        let mut list_state = ListState::default().with_selected(Some(self.dir_view.get_selected()));
         frame.render_stateful_widget(list, frame.area(), &mut list_state)
     }
 }

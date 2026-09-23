@@ -9,7 +9,7 @@ use crossterm::{
 };
 use ratatui::DefaultTerminal;
 
-use crate::fs::{FileEntry, get_files, part_files};
+use crate::fs::{EntryType, FileEntry, get_files, part_files};
 
 #[derive(Debug, Default)]
 pub struct App {
@@ -18,27 +18,110 @@ pub struct App {
     pub show_hidden: bool,
     // Event stream.
     pub event_stream: EventStream,
+    pub dir_view: DirView,
+}
 
-    pub curr_dir: PathBuf,
+#[derive(Debug, Default)]
+pub struct DirView {
+    pub cwd: PathBuf,
     pub visible: Vec<FileEntry>,
     pub hidden: Vec<FileEntry>,
     pub selected: usize,
+}
+impl DirView {
+    pub async fn new(cwd: PathBuf) -> Result<Self> {
+        let files = get_files(&cwd).await?;
+        let (hidden, visible) = part_files(files);
+        Ok(Self {
+            cwd,
+            visible,
+            hidden,
+            selected: 0,
+        })
+    }
+
+    pub fn increase_sel(&mut self) {
+        self.selected = self.selected.saturating_sub(1);
+    }
+
+    pub fn decrease_sel(&mut self, is_hidden: bool) {
+        if self.displayed(is_hidden).is_empty() {
+            return;
+        }
+        self.selected = (self.selected + 1).min(self.displayed_len(is_hidden) - 1);
+    }
+
+    pub async fn get_entry_type(&mut self, is_hidden: bool) -> Option<EntryType> {
+        let idx = &self.selected;
+        let files = self.displayed(is_hidden);
+        if files.is_empty() {
+            return None;
+        }
+        let file = files[*idx].clone();
+        Some(file.ent_type)
+    }
+
+    pub async fn open_dir(&mut self, is_hidden: bool) -> Result<()> {
+        let idx = &self.selected;
+        let file = self.displayed(is_hidden)[*idx].clone();
+        self.selected = 0;
+        let new_files = get_files(&file.path).await?;
+        self.set_files(new_files);
+        self.cwd = file.path;
+        Ok(())
+    }
+    pub async fn open_file(&mut self, is_hidden: bool) -> Result<(FileEntry, bool)> {
+        let idx = &self.selected;
+        let file = self.displayed(is_hidden)[*idx].clone();
+        if file.is_text_file() {
+            Ok((file, true))
+        } else {
+            Ok((file, false))
+        }
+    }
+
+    pub async fn go_parent(&mut self) -> Result<()> {
+        if let Some(parent) = &self.cwd.parent() {
+            self.selected = 0;
+            let files = get_files(&parent.to_path_buf()).await?;
+            self.cwd = parent.to_path_buf();
+            self.set_files(files);
+            Ok(())
+        } else {
+            return Ok(());
+        }
+    }
+
+    fn set_files(&mut self, files: Vec<FileEntry>) {
+        (self.hidden, self.visible) = part_files(files);
+    }
+    pub fn displayed(&self, is_hidden: bool) -> Vec<&FileEntry> {
+        if is_hidden {
+            self.hidden.iter().chain(self.visible.iter()).collect()
+        } else {
+            self.visible.iter().collect()
+        }
+    }
+
+    pub fn get_selected(&self) -> usize {
+        self.selected
+    }
+
+    fn displayed_len(&self, is_hidden: bool) -> usize {
+        self.displayed(is_hidden).len()
+    }
 }
 
 impl App {
     /// Construct a new instance of [`App`].
     pub async fn new() -> Result<Self> {
         let curr_dir = env::current_dir().unwrap();
-        let files = get_files(&curr_dir).await?;
-        let (hidden, visible) = part_files(files);
+        let dir_view = DirView::new(curr_dir).await?;
         Ok(Self {
             running: true,
             show_hidden: false,
             event_stream: EventStream::default(),
-            curr_dir,
-            visible,
-            hidden,
-            selected: 0,
+            dir_view,
         })
     }
 
@@ -48,6 +131,25 @@ impl App {
         while self.running {
             terminal.draw(|frame| self.draw(frame))?;
             self.handle_crossterm_events(&mut terminal).await?;
+        }
+        Ok(())
+    }
+
+    pub async fn handle_file(&mut self, terminal: &mut DefaultTerminal) -> Result<()> {
+        let (f, is_txt) = self.dir_view.open_file(self.show_hidden).await?;
+        if is_txt {
+            disable_raw_mode()?;
+            execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+            f.edit_file().await?;
+            enable_raw_mode()?;
+            execute!(terminal.backend_mut(), EnterAlternateScreen,)?;
+            terminal.clear()?;
+        } else {
+            tokio::process::Command::new("xdg-open")
+                .arg(&f.path)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()?;
         }
         Ok(())
     }
@@ -62,50 +164,24 @@ impl App {
             (_, KeyCode::Esc | KeyCode::Char('q'))
             | (KeyModifiers::CONTROL, KeyCode::Char('c') | KeyCode::Char('C')) => self.quit(),
             (_, KeyCode::Up | KeyCode::Char('k')) => {
-                self.selected = self.selected.saturating_sub(1);
+                self.dir_view.increase_sel();
             }
             (_, KeyCode::Down | KeyCode::Char('j')) => {
-                if self.displayed().is_empty() {
-                    return Ok(());
-                }
-                self.selected = (self.selected + 1).min(self.displayed_len() - 1);
+                self.dir_view.decrease_sel(self.show_hidden);
             }
             (_, KeyCode::Enter | KeyCode::Char('l') | KeyCode::Right) => {
-                let idx = &self.selected;
-                let files = self.displayed();
-                if files.is_empty() {
-                    return Ok(());
-                }
-                let file = files[*idx].clone();
-                if file.is_dir {
-                    self.selected = 0;
-                    let new_files = get_files(&file.path).await?;
-                    self.set_files(new_files);
-                    self.curr_dir = file.path;
-                } else if file.is_text_file() {
-                    disable_raw_mode()?;
-                    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-                    file.edit_file().await?;
-                    enable_raw_mode()?;
-                    execute!(terminal.backend_mut(), EnterAlternateScreen,)?;
-                    terminal.clear()?;
-                } else {
-                    tokio::process::Command::new("xdg-open")
-                        .arg(&file.path)
-                        .stdout(Stdio::null())
-                        .stderr(Stdio::null())
-                        .spawn()?;
+                if let Some(e) = self.dir_view.get_entry_type(self.show_hidden).await {
+                    match e {
+                        EntryType::Directory => {
+                            self.dir_view.open_dir(self.show_hidden).await?;
+                        }
+                        EntryType::File => self.handle_file(terminal).await?,
+                        EntryType::Symlink => todo!(),
+                    }
                 }
             }
             (_, KeyCode::Backspace | KeyCode::Char('h') | KeyCode::Left) => {
-                if let Some(parent) = &self.curr_dir.parent() {
-                    self.selected = 0;
-                    let files = get_files(&parent.to_path_buf()).await?;
-                    self.curr_dir = parent.to_path_buf();
-                    self.set_files(files);
-                } else {
-                    return Ok(());
-                }
+                self.dir_view.go_parent().await?;
             }
             (_, KeyCode::Char('.')) => self.show_hidden = !self.show_hidden,
 
@@ -132,22 +208,6 @@ impl App {
             _ => {}
         }
         Ok(())
-    }
-
-    fn displayed(&self) -> Vec<&FileEntry> {
-        if self.show_hidden {
-            self.hidden.iter().chain(self.visible.iter()).collect()
-        } else {
-            self.visible.iter().collect()
-        }
-    }
-
-    fn displayed_len(&self) -> usize {
-        self.displayed().len()
-    }
-
-    fn set_files(&mut self, files: Vec<FileEntry>) {
-        (self.hidden, self.visible) = part_files(files);
     }
 
     /// Set running to false to quit the application.
