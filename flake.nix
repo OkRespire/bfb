@@ -11,11 +11,11 @@
   };
   outputs =
     {
-      self,
       nixpkgs,
       flake-utils,
       fenix,
       crane,
+      ...
     }:
     flake-utils.lib.eachDefaultSystem (
       system:
@@ -29,19 +29,18 @@
         ];
         craneLib = (crane.mkLib pkgs).overrideToolchain toolchain;
         cargoToml = builtins.fromTOML (builtins.readFile ./Cargo.toml);
+
+        # programs bfb shells out to at runtime
+        runtimeDeps = [ pkgs.xdg-utils ];
+
         commonArgs = {
           pname = cargoToml.package.name;
           version = cargoToml.package.version;
           src = craneLib.cleanCargoSource (craneLib.path ./.);
           strictDeps = true;
-          nativeBuildInputs = with pkgs; [
-            pkg-config
-            autoPatchelfHook
-            mold
-            makeWrapper
-          ];
-          buildInputs = [
-            pkgs.stdenv.cc.cc.lib
+          nativeBuildInputs = [
+            pkgs.mold
+            pkgs.makeWrapper
           ];
           RUSTFLAGS = "-C link-arg=-fuse-ld=mold -C link-arg=-B${pkgs.mold}/bin";
         };
@@ -49,11 +48,16 @@
         bfb = craneLib.buildPackage (
           commonArgs
           // {
+            inherit cargoArtifacts;
             postInstall = ''
               wrapProgram $out/bin/bfb \
-                --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.nix ]}
+                --suffix PATH : ${pkgs.lib.makeBinPath runtimeDeps}
             '';
-            inherit cargoArtifacts;
+            meta = {
+              description = "Boring File Browser: a simple TUI file browser";
+              mainProgram = "bfb";
+              license = pkgs.lib.licenses.mit;
+            };
           }
         );
       in
@@ -62,15 +66,26 @@
         packages.default = bfb;
         apps.default = {
           type = "app";
-          program = "${bfb}/bin/bfb";
+          program = pkgs.lib.getExe bfb;
+        };
+        checks = {
+          inherit bfb;
+          clippy = craneLib.cargoClippy (
+            commonArgs
+            // {
+              inherit cargoArtifacts;
+              cargoClippyExtraArgs = "--all-targets -- --deny warnings";
+            }
+          );
+          fmt = craneLib.cargoFmt { inherit (commonArgs) pname version src; };
+          test = craneLib.cargoTest (commonArgs // { inherit cargoArtifacts; });
         };
         devShells.default = pkgs.mkShell {
-          inputsFrom = [ bfb ];
-          nativeBuildInputs = [
+          packages = [
             devToolchain
-            pkgs.nix
-          ];
-          RUST_LOG = "debug";
+            pkgs.mold
+          ]
+          ++ runtimeDeps;
         };
       }
     );

@@ -1,7 +1,10 @@
-use std::{env, path::PathBuf};
+use std::{env, path::PathBuf, str::from_utf8};
 
 use color_eyre::Result;
-use tokio::fs::read_dir;
+use tokio::{
+    fs::{File, read_dir},
+    io::AsyncReadExt,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EntryType {
@@ -48,7 +51,7 @@ impl std::fmt::Display for FileEntry {
             EntryType::Symlink => write!(f, "\u{f504}")?,
         }
 
-        writeln!(f, "{}", self.name)?;
+        write!(f, "{}", self.name)?;
 
         Ok(())
     }
@@ -78,27 +81,45 @@ impl FileEntry {
         Ok(())
     }
 
-    pub fn is_text_file(&self) -> bool {
-        matches!(
-            self.path.extension().and_then(|e| e.to_str()),
-            Some(
-                "rs" | "cpp"
-                    | "c"
-                    | "h"
-                    | "hpp"
-                    | "py"
-                    | "js"
-                    | "ts"
-                    | "toml"
-                    | "md"
-                    | "txt"
-                    | "nix"
-                    | "sh"
-                    | "json"
-                    | "yaml"
-                    | "yml"
-            )
-        )
+    /// Checks if the file is a text file by inspecting the first 4KB of the file.
+    /// [`true`] => is text
+    ///
+    /// [`false`] => is binary
+    ///
+    /// Returns [`Ok(true)`] if the file is empty, is a valid UTF-8 string, or the bytes are a
+    /// valid UTF-8 string except that they end part-way through a character (like a 4-byte emoji).
+    ///
+    /// Returns [`Ok(false)`] if the file contains a NUL (0x00) in the first 4096 bytes of the file or if the bytes contain an
+    /// invalid UTF-8 byte.
+    ///
+    /// # Error
+    /// - If the file cannot be opened or read, it will return an [`Err`]
+    ///
+    /// # Limitation
+    /// - Since the reading of the file is only 4096 bytes, a case can arise where the NUL character
+    /// is beyond the taken bytes and return [`Ok(true)`]
+    /// - **NOTE:** This has not been rigorously tested, so there may be more limitations than meets
+    /// the eye
+    pub async fn is_text_file(&self) -> Result<bool> {
+        let mut buf = Vec::new();
+        let f = File::open(&self.path).await?;
+        let mut take = AsyncReadExt::take(f, 4096);
+        take.read_to_end(&mut buf).await?;
+
+        if buf.is_empty() {
+            return Ok(true);
+        }
+
+        if buf.contains(&0b0) {
+            return Ok(false);
+        }
+        match from_utf8(&buf) {
+            Ok(_) => return Ok(true),
+            Err(e) => match e.error_len() {
+                Some(_) => return Ok(false),
+                None => return Ok(true),
+            },
+        }
     }
 }
 
