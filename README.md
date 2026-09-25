@@ -16,7 +16,8 @@ A simple TUI file browser built with ratatui. WIP
   - If `$EDITOR` is not set, it will fallback to `vi`
 
 ### Features to be developed
-- [ ] Viewing symlink directories and files.
+- [x] Viewing symlink directories and files.
+  - Some folders appear as files so time to troubleshoot!
 - [ ] File Previews
 - [ ] Add more Nerd Font icons for file
 - [ ] Add customisation

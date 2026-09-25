@@ -1,8 +1,11 @@
-use std::{env, path::PathBuf, str::from_utf8};
+use std::{env, fmt::format, path::PathBuf, str::from_utf8};
 
-use color_eyre::Result;
+use color_eyre::{
+    Result,
+    eyre::{Context, ContextCompat},
+};
 use tokio::{
-    fs::{File, read_dir},
+    fs::{self, File, read_dir},
     io::AsyncReadExt,
 };
 
@@ -10,7 +13,11 @@ use tokio::{
 pub enum EntryType {
     Directory,
     File,
-    Symlink,
+    Symlink {
+        is_dir: Option<bool>,
+        path: PathBuf,
+        parent: PathBuf,
+    },
 }
 
 impl PartialOrd for EntryType {
@@ -29,9 +36,9 @@ impl Ord for EntryType {
 
             // Files and symlinks have no hierarchy yet
             (EntryType::File, EntryType::File) => std::cmp::Ordering::Equal,
-            (EntryType::Symlink, EntryType::Symlink) => std::cmp::Ordering::Equal,
-            (EntryType::File, EntryType::Symlink) => std::cmp::Ordering::Equal,
-            (EntryType::Symlink, EntryType::File) => std::cmp::Ordering::Equal,
+            (EntryType::Symlink { .. }, EntryType::Symlink { .. }) => std::cmp::Ordering::Equal,
+            (EntryType::File, EntryType::Symlink { .. }) => std::cmp::Ordering::Equal,
+            (EntryType::Symlink { .. }, EntryType::File) => std::cmp::Ordering::Equal,
         }
     }
 }
@@ -48,10 +55,22 @@ impl std::fmt::Display for FileEntry {
         match self.ent_type {
             EntryType::Directory => write!(f, "\u{f07b} ")?,
             EntryType::File => write!(f, "\u{f15b} ")?,
-            EntryType::Symlink => write!(f, "\u{f504}")?,
+            EntryType::Symlink { is_dir, .. } => match is_dir {
+                Some(a) => {
+                    if a {
+                        write!(f, "\u{f482} ")?
+                    } else {
+                        write!(f, "\u{f481} ")?;
+                    }
+                }
+                None => write!(f, "\u{f127} ")?,
+            },
         }
 
-        write!(f, "{}", self.name)?;
+        match &self.ent_type {
+            EntryType::Directory | EntryType::File => write!(f, "{}", self.name)?,
+            EntryType::Symlink { path, .. } => write!(f, "{} → {:#?} ", self.name, path)?,
+        }
 
         Ok(())
     }
@@ -100,11 +119,22 @@ impl FileEntry {
     /// is beyond the taken bytes and return [`Ok(true)`]
     /// - **NOTE:** This has not been rigorously tested, so there may be more limitations than meets
     /// the eye
+    #[warn(clippy::doc_lazy_continuation)]
     pub async fn is_text_file(&self) -> Result<bool> {
         let mut buf = Vec::new();
-        let f = File::open(&self.path).await?;
+        let mut path_debug = "";
+        let f = match &self.ent_type {
+            EntryType::Directory => unreachable!(),
+            EntryType::File => File::open(&self.path).await?,
+            EntryType::Symlink { path, .. } => {
+                path_debug = path.to_str().unwrap();
+                File::open(path).await?
+            }
+        };
         let mut take = AsyncReadExt::take(f, 4096);
-        take.read_to_end(&mut buf).await?;
+        take.read_to_end(&mut buf)
+            .await
+            .context(format!("Could not read file in {}", path_debug))?;
 
         if buf.is_empty() {
             return Ok(true);
@@ -114,29 +144,42 @@ impl FileEntry {
             return Ok(false);
         }
         match from_utf8(&buf) {
-            Ok(_) => return Ok(true),
+            Ok(_) => Ok(true),
             Err(e) => match e.error_len() {
-                Some(_) => return Ok(false),
-                None => return Ok(true),
+                Some(_) => Ok(false),
+                None => Ok(true),
             },
         }
     }
 }
 
 pub async fn get_files(cwd: &PathBuf) -> Result<Vec<FileEntry>> {
-    let mut entries = read_dir(cwd).await?;
+    let mut entries = read_dir(cwd)
+        .await
+        .context(format!("Could not read directory {:#?}", cwd))?;
     let mut files: Vec<FileEntry> = Vec::new();
     while let Some(entry) = entries.next_entry().await? {
         let name = entry.file_name().to_string_lossy().to_string();
         let entry_ft = entry.file_type().await?;
+        let path = entry.path();
         let ent_type = if entry_ft.is_dir() {
             EntryType::Directory
         } else if entry_ft.is_file() {
             EntryType::File
         } else {
-            EntryType::Symlink
+            let sym_path = fs::read_link(&path)
+                .await
+                .context(format!("Could not resolve actual path of {:#?}", path))?;
+            let is_dir = match fs::symlink_metadata(&sym_path).await {
+                Ok(m) => Some(m.is_dir()),
+                Err(_) => None,
+            };
+            EntryType::Symlink {
+                is_dir,
+                path: sym_path,
+                parent: cwd.to_path_buf(),
+            }
         };
-        let path = entry.path();
         let fe = FileEntry {
             name,
             ent_type,

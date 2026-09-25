@@ -1,5 +1,5 @@
 use futures::{FutureExt, StreamExt};
-use std::{env, path::PathBuf, process::Stdio};
+use std::{env, process::Stdio};
 
 use color_eyre::Result;
 use crossterm::{
@@ -73,10 +73,10 @@ impl App {
             (_, KeyCode::Esc | KeyCode::Char('q'))
             | (KeyModifiers::CONTROL, KeyCode::Char('c') | KeyCode::Char('C')) => self.quit(),
             (_, KeyCode::Up | KeyCode::Char('k')) => {
-                self.dir_view.increase_sel();
+                self.dir_view.move_up();
             }
             (_, KeyCode::Down | KeyCode::Char('j')) => {
-                self.dir_view.decrease_sel(self.show_hidden);
+                self.dir_view.move_down(self.show_hidden);
             }
             (_, KeyCode::Enter | KeyCode::Char('l') | KeyCode::Right) => {
                 if let Some(e) = self.dir_view.get_entry_type(self.show_hidden).await {
@@ -85,7 +85,16 @@ impl App {
                             self.dir_view.open_dir(self.show_hidden).await?;
                         }
                         EntryType::File => self.handle_file(terminal).await?,
-                        EntryType::Symlink => todo!(),
+                        EntryType::Symlink { is_dir, .. } => match is_dir {
+                            Some(a) => {
+                                if a {
+                                    self.dir_view.open_dir(self.show_hidden).await?;
+                                } else {
+                                    self.handle_file(terminal).await?;
+                                }
+                            }
+                            None => return Ok(()),
+                        },
                     }
                 }
             }

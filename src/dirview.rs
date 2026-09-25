@@ -6,6 +6,7 @@ use crate::fs::{EntryType, FileEntry, get_files, part_files};
 #[derive(Debug, Default)]
 pub struct DirView {
     pub cwd: PathBuf,
+    pub history: Vec<PathBuf>,
     pub visible: Vec<FileEntry>,
     pub hidden: Vec<FileEntry>,
     pub selected: usize,
@@ -15,18 +16,19 @@ impl DirView {
         let files = get_files(&cwd).await?;
         let (hidden, visible) = part_files(files);
         Ok(Self {
-            cwd,
+            history: Vec::new(),
             visible,
             hidden,
             selected: 0,
+            cwd,
         })
     }
 
-    pub fn increase_sel(&mut self) {
+    pub fn move_up(&mut self) {
         self.selected = self.selected.saturating_sub(1);
     }
 
-    pub fn decrease_sel(&mut self, is_hidden: bool) {
+    pub fn move_down(&mut self, is_hidden: bool) {
         if self.displayed(is_hidden).is_empty() {
             return;
         }
@@ -46,10 +48,16 @@ impl DirView {
     pub async fn open_dir(&mut self, is_hidden: bool) -> Result<()> {
         let idx = &self.selected;
         let file = self.displayed(is_hidden)[*idx].clone();
+        let path = match file.ent_type {
+            EntryType::Directory => file.path,
+            EntryType::File => unreachable!(),
+            EntryType::Symlink { path, .. } => path,
+        };
         self.selected = 0;
-        let new_files = get_files(&file.path).await?;
+        let new_files = get_files(&path).await?;
         self.set_files(new_files);
-        self.cwd = file.path;
+        self.history.push(self.cwd.clone());
+        self.cwd = path;
         Ok(())
     }
 
@@ -64,15 +72,19 @@ impl DirView {
     }
 
     pub async fn go_parent(&mut self) -> Result<()> {
-        if let Some(parent) = &self.cwd.parent() {
-            self.selected = 0;
-            let files = get_files(&parent.to_path_buf()).await?;
-            self.cwd = parent.to_path_buf();
-            self.set_files(files);
-            Ok(())
-        } else {
-            return Ok(());
-        }
+        let path = match self.history.pop() {
+            Some(p) => p,
+            None => match self.cwd.parent() {
+                Some(pt) => pt.to_path_buf(),
+                None => return Ok(()),
+            },
+        };
+
+        self.selected = 0;
+        let files = get_files(&path).await?;
+        self.cwd = path;
+        self.set_files(files);
+        Ok(())
     }
 
     fn set_files(&mut self, files: Vec<FileEntry>) {
