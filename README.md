@@ -17,7 +17,7 @@ A simple TUI file browser built with ratatui. WIP
 
 ### Features to be developed
 - [x] Viewing symlink directories and files.
-  - Some folders appear as files so time to troubleshoot!
+- [ ] Modify and add new files
 - [ ] File Previews
 - [ ] Add more Nerd Font icons for file
 - [ ] Add customisation

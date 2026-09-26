@@ -170,10 +170,11 @@ pub async fn get_files(cwd: &PathBuf) -> Result<Vec<FileEntry>> {
             let sym_path = fs::read_link(&path)
                 .await
                 .context(format!("Could not resolve actual path of {:#?}", path))?;
-            let is_dir = match fs::symlink_metadata(&sym_path).await {
+            let is_dir = match fs::metadata(&sym_path).await {
                 Ok(m) => Some(m.is_dir()),
                 Err(_) => None,
             };
+            tracing::debug!(?path, ?is_dir, "building symlink entry");
             EntryType::Symlink {
                 is_dir,
                 path: sym_path,
