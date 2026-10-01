@@ -1,9 +1,6 @@
-use std::{env, fmt::format, path::PathBuf, str::from_utf8};
+use std::{env, fs::Permissions, os::unix::fs::PermissionsExt, path::PathBuf, str::from_utf8};
 
-use color_eyre::{
-    Result,
-    eyre::{Context, ContextCompat},
-};
+use color_eyre::{Result, eyre::Context};
 use tokio::{
     fs::{self, File, read_dir},
     io::AsyncReadExt,
@@ -48,6 +45,7 @@ pub struct FileEntry {
     pub name: String,
     pub path: PathBuf,
     pub ent_type: EntryType,
+    pub permissions: u32,
 }
 
 impl std::fmt::Display for FileEntry {
@@ -151,6 +149,29 @@ impl FileEntry {
             },
         }
     }
+
+    pub fn permissions(&self) -> String {
+        let mut s = String::with_capacity(9);
+        for shift in [6, 3, 0] {
+            s.push(if self.permissions & (0o4 << shift) != 0 {
+                'r'
+            } else {
+                '-'
+            });
+            s.push(if self.permissions & (0o2 << shift) != 0 {
+                'w'
+            } else {
+                '-'
+            });
+            s.push(if self.permissions & (0o1 << shift) != 0 {
+                'x'
+            } else {
+                '-'
+            });
+        }
+
+        s
+    }
 }
 
 pub async fn get_files(cwd: &PathBuf) -> Result<Vec<FileEntry>> {
@@ -162,6 +183,11 @@ pub async fn get_files(cwd: &PathBuf) -> Result<Vec<FileEntry>> {
         let name = entry.file_name().to_string_lossy().to_string();
         let entry_ft = entry.file_type().await?;
         let path = entry.path();
+        let permissions = if entry_ft.is_symlink() {
+            fs::symlink_metadata(&path).await?.permissions().mode() & 0o777
+        } else {
+            fs::metadata(&path).await?.permissions().mode() & 0o777
+        };
         let ent_type = if entry_ft.is_dir() {
             EntryType::Directory
         } else if entry_ft.is_file() {
@@ -185,6 +211,7 @@ pub async fn get_files(cwd: &PathBuf) -> Result<Vec<FileEntry>> {
             name,
             ent_type,
             path,
+            permissions,
         };
         files.push(fe)
     }
