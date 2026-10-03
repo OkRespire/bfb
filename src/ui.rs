@@ -2,7 +2,6 @@ use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Layout},
     style::{Color, Style},
-    text::Line,
     widgets::{List, ListItem, ListState, Paragraph},
 };
 
@@ -30,7 +29,7 @@ impl App {
             Constraint::Length(9),
         ])
         .split(status_area);
-        let displayed = self.dir_view.displayed(self.show_hidden);
+        let displayed = self.dir_view.displayed();
 
         let mode_ch = status_chunks[0];
         let action_ch = status_chunks[1];

@@ -1,9 +1,10 @@
-use std::{env, fs::Permissions, os::unix::fs::PermissionsExt, path::PathBuf, str::from_utf8};
+use std::{env, io::ErrorKind, os::unix::fs::PermissionsExt, path::PathBuf, str::from_utf8};
 
 use color_eyre::{Result, eyre::Context};
 use tokio::{
     fs::{self, File, read_dir},
     io::AsyncReadExt,
+    task,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -148,6 +149,26 @@ impl FileEntry {
                 None => Ok(true),
             },
         }
+    }
+
+    pub async fn delete(&self, permanent: bool) -> Result<()> {
+        match self.ent_type {
+            EntryType::Directory | EntryType::File | EntryType::Symlink { .. } if !permanent => {
+                let path = self.path.clone();
+                task::spawn_blocking(move || trash::delete(&path)).await??;
+            }
+            EntryType::Directory => {
+                fs::remove_dir_all(&self.path).await?;
+            }
+            EntryType::File | EntryType::Symlink { .. } => {
+                fs::remove_file(&self.path).await?;
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn rename(&self, name: String) -> Result<()> {
+        Ok(())
     }
 
     pub fn permissions(&self) -> String {

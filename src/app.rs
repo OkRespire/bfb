@@ -9,8 +9,21 @@ use crossterm::{
 };
 use ratatui::DefaultTerminal;
 
-use crate::{dirview::DirView, fs::EntryType};
+use crate::{config::Config, dirview::DirView, fs::EntryType};
 
+#[derive(Debug)]
+pub enum Mode {
+    Browsing,
+    ConfirmDelete,
+    Rename,
+    Visual,
+}
+
+impl Default for Mode {
+    fn default() -> Self {
+        Self::Browsing
+    }
+}
 pub enum Message {
     MoveUp,
     MoveDown,
@@ -18,22 +31,26 @@ pub enum Message {
     GoParent,
     ToggleHidden,
     Quit,
+    Delete,
 }
 
 pub enum Command {
     None,
     OpenSelected,
     GoParent,
+    Delete,
+    Rename { name: String },
 }
 
 #[derive(Debug, Default)]
 pub struct App {
     /// Is the application running?
     pub running: bool,
-    pub show_hidden: bool,
     // Event stream.
     pub event_stream: EventStream,
     pub dir_view: DirView,
+    pub config: Config,
+    pub mode: Mode,
 }
 
 impl App {
@@ -43,9 +60,10 @@ impl App {
         let dir_view = DirView::new(curr_dir).await?;
         Ok(Self {
             running: true,
-            show_hidden: false,
             event_stream: EventStream::default(),
+            config: Config::default(),
             dir_view,
+            mode: Mode::default(),
         })
     }
 
@@ -60,7 +78,7 @@ impl App {
     }
 
     pub async fn handle_file(&mut self, terminal: &mut DefaultTerminal) -> Result<()> {
-        let (f, is_txt) = self.dir_view.check_file(self.show_hidden).await?;
+        let (f, is_txt) = self.dir_view.check_file().await?;
         if is_txt {
             disable_raw_mode()?;
             execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
@@ -88,16 +106,16 @@ impl App {
         match command {
             Command::None => {}
             Command::OpenSelected => {
-                if let Some(e) = self.dir_view.get_entry_type(self.show_hidden).await {
+                if let Some(e) = self.dir_view.get_entry_type().await {
                     match e {
                         EntryType::Directory => {
-                            self.dir_view.open_dir(self.show_hidden).await?;
+                            self.dir_view.open_dir().await?;
                         }
                         EntryType::File => self.handle_file(terminal).await?,
                         EntryType::Symlink { is_dir, .. } => match is_dir {
                             Some(a) => {
                                 if a {
-                                    self.dir_view.open_dir(self.show_hidden).await?;
+                                    self.dir_view.open_dir().await?;
                                 } else {
                                     self.handle_file(terminal).await?;
                                 }
@@ -108,11 +126,14 @@ impl App {
                 }
             }
             Command::GoParent => self.dir_view.go_parent().await?,
+            Command::Delete => self.dir_view.delete(self.config.permanent_rm).await?,
+            Command::Rename { name } => self.dir_view.rename(name).await?,
         }
 
         Ok(())
     }
 
+    // TODO: Add Request, Confirm and Cancel Delete
     pub fn update(&mut self, action: Option<Message>) -> Command {
         if let Some(a) = action {
             match a {
@@ -120,23 +141,25 @@ impl App {
                     self.dir_view.move_up();
                 }
                 Message::MoveDown => {
-                    self.dir_view.move_down(self.show_hidden);
+                    self.dir_view.move_down();
                 }
                 Message::Open => return Command::OpenSelected,
 
                 Message::GoParent => return Command::GoParent,
                 Message::ToggleHidden => {
-                    self.show_hidden = !self.show_hidden;
+                    self.dir_view.is_hidden = !self.dir_view.is_hidden;
                 }
                 Message::Quit => {
                     self.quit();
                 }
+                Message::Delete => return Command::Delete,
             }
         }
         Command::None
     }
 
     /// Handles the key events and updates the state of [`App`].
+    // TODO: Split browsing, confirm delete, and etc later
     pub fn on_key_event(&mut self, key: KeyEvent) -> Option<Message> {
         match (key.modifiers, key.code) {
             (_, KeyCode::Esc | KeyCode::Char('q'))
@@ -147,6 +170,7 @@ impl App {
             (_, KeyCode::Down | KeyCode::Char('j')) => Some(Message::MoveDown),
             (_, KeyCode::Enter | KeyCode::Char('l') | KeyCode::Right) => Some(Message::Open),
             (_, KeyCode::Backspace | KeyCode::Char('h') | KeyCode::Left) => Some(Message::GoParent),
+            (_, KeyCode::Char('d')) => Some(Message::Delete),
             (_, KeyCode::Char('.')) => Some(Message::ToggleHidden),
 
             _ => None,

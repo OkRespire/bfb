@@ -1,5 +1,5 @@
 use color_eyre::Result;
-use std::path::PathBuf;
+use std::{fs, path::PathBuf};
 
 use crate::fs::{EntryType, FileEntry, get_files, part_files};
 
@@ -9,6 +9,7 @@ pub struct DirView {
     pub history: Vec<PathBuf>,
     pub visible: Vec<FileEntry>,
     pub hidden: Vec<FileEntry>,
+    pub is_hidden: bool,
     pub selected: usize,
 }
 impl DirView {
@@ -19,6 +20,7 @@ impl DirView {
             history: Vec::new(),
             visible,
             hidden,
+            is_hidden: false,
             selected: 0,
             cwd,
         })
@@ -28,16 +30,16 @@ impl DirView {
         self.selected = self.selected.saturating_sub(1);
     }
 
-    pub fn move_down(&mut self, is_hidden: bool) {
-        if self.displayed(is_hidden).is_empty() {
+    pub fn move_down(&mut self) {
+        if self.displayed().is_empty() {
             return;
         }
-        self.selected = (self.selected + 1).min(self.displayed_len(is_hidden) - 1);
+        self.selected = (self.selected + 1).min(self.displayed_len() - 1);
     }
 
-    pub async fn get_entry_type(&mut self, is_hidden: bool) -> Option<EntryType> {
+    pub async fn get_entry_type(&mut self) -> Option<EntryType> {
         let idx = &self.selected;
-        let files = self.displayed(is_hidden);
+        let files = self.displayed();
         if files.is_empty() {
             return None;
         }
@@ -45,9 +47,9 @@ impl DirView {
         Some(file.ent_type)
     }
 
-    pub async fn open_dir(&mut self, is_hidden: bool) -> Result<()> {
+    pub async fn open_dir(&mut self) -> Result<()> {
         let idx = &self.selected;
-        let file = self.displayed(is_hidden)[*idx].clone();
+        let file = self.displayed()[*idx].clone();
         let path = match file.ent_type {
             EntryType::Directory => file.path,
             EntryType::File => unreachable!(),
@@ -61,9 +63,9 @@ impl DirView {
         Ok(())
     }
 
-    pub async fn check_file(&mut self, is_hidden: bool) -> Result<(FileEntry, bool)> {
+    pub async fn check_file(&mut self) -> Result<(FileEntry, bool)> {
         let idx = &self.selected;
-        let file = self.displayed(is_hidden)[*idx].clone();
+        let file = self.displayed()[*idx].clone();
         if file.is_text_file().await? {
             Ok((file, true))
         } else {
@@ -87,11 +89,41 @@ impl DirView {
         Ok(())
     }
 
+    pub async fn rename(&mut self, name: String) -> Result<()> {
+        let displayed = self.displayed();
+        let x = if let Some(f) = displayed.get(self.selected) {
+            f
+        } else {
+            return Ok(());
+        };
+        x.rename(name).await?;
+        Ok(())
+    }
+
+    pub async fn delete(&mut self, remove: bool) -> Result<()> {
+        let displayed = self.displayed();
+        let x = if let Some(f) = displayed.get(self.selected) {
+            f
+        } else {
+            return Ok(());
+        };
+        x.delete(remove).await?;
+        self.refresh().await?;
+        Ok(())
+    }
+
+    pub async fn refresh(&mut self) -> Result<()> {
+        let new_files = get_files(&self.cwd).await?;
+        self.set_files(new_files);
+        Ok(())
+    }
+
     fn set_files(&mut self, files: Vec<FileEntry>) {
         (self.hidden, self.visible) = part_files(files);
     }
-    pub fn displayed(&self, is_hidden: bool) -> Vec<&FileEntry> {
-        if is_hidden {
+
+    pub fn displayed(&self) -> Vec<&FileEntry> {
+        if self.is_hidden {
             self.hidden.iter().chain(self.visible.iter()).collect()
         } else {
             self.visible.iter().collect()
@@ -102,7 +134,7 @@ impl DirView {
         self.selected
     }
 
-    fn displayed_len(&self, is_hidden: bool) -> usize {
-        self.displayed(is_hidden).len()
+    fn displayed_len(&self) -> usize {
+        self.displayed().len()
     }
 }
