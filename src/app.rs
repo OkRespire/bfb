@@ -14,8 +14,8 @@ use crate::{config::Config, dirview::DirView, fs::EntryType};
 #[derive(Debug)]
 pub enum Mode {
     Browsing,
-    ConfirmDelete,
-    Rename,
+    ConfirmDelete { permanent: bool },
+    Rename { query: String },
     Visual,
 }
 
@@ -31,14 +31,19 @@ pub enum Message {
     GoParent,
     ToggleHidden,
     Quit,
-    Delete,
+    CancelConfirm,
+    RequestDelete { permanent: bool },
+    ConfirmDelete,
+    RequestRename,
+    Rename,
+    ToggleVisual,
 }
 
 pub enum Command {
     None,
     OpenSelected,
     GoParent,
-    Delete,
+    Delete { permanent: bool },
     Rename { name: String },
 }
 
@@ -126,7 +131,9 @@ impl App {
                 }
             }
             Command::GoParent => self.dir_view.go_parent().await?,
-            Command::Delete => self.dir_view.delete(self.config.permanent_rm).await?,
+            Command::Delete { permanent: normal } => {
+                self.dir_view.delete(normal).await?;
+            }
             Command::Rename { name } => self.dir_view.rename(name).await?,
         }
 
@@ -152,7 +159,31 @@ impl App {
                 Message::Quit => {
                     self.quit();
                 }
-                Message::Delete => return Command::Delete,
+                Message::ConfirmDelete => {
+                    let Mode::ConfirmDelete { permanent } =
+                        std::mem::replace(&mut self.mode, Mode::Browsing)
+                    else {
+                        return Command::None;
+                    };
+                    return Command::Delete { permanent };
+                }
+                Message::RequestDelete { permanent } => {
+                    self.mode = Mode::ConfirmDelete { permanent }
+                }
+                Message::CancelConfirm => self.mode = Mode::Browsing,
+                Message::RequestRename => {
+                    self.mode = Mode::Rename {
+                        query: String::new(),
+                    }
+                }
+                Message::ToggleVisual => self.mode = Mode::Visual,
+                Message::Rename => {
+                    let Mode::Rename { query } = std::mem::replace(&mut self.mode, Mode::Browsing)
+                    else {
+                        return Command::None;
+                    };
+                    return Command::Rename { name: query };
+                }
             }
         }
         Command::None
@@ -161,19 +192,50 @@ impl App {
     /// Handles the key events and updates the state of [`App`].
     // TODO: Split browsing, confirm delete, and etc later
     pub fn on_key_event(&mut self, key: KeyEvent) -> Option<Message> {
-        match (key.modifiers, key.code) {
-            (_, KeyCode::Esc | KeyCode::Char('q'))
-            | (KeyModifiers::CONTROL, KeyCode::Char('c') | KeyCode::Char('C')) => {
-                Some(Message::Quit)
-            }
-            (_, KeyCode::Up | KeyCode::Char('k')) => Some(Message::MoveUp),
-            (_, KeyCode::Down | KeyCode::Char('j')) => Some(Message::MoveDown),
-            (_, KeyCode::Enter | KeyCode::Char('l') | KeyCode::Right) => Some(Message::Open),
-            (_, KeyCode::Backspace | KeyCode::Char('h') | KeyCode::Left) => Some(Message::GoParent),
-            (_, KeyCode::Char('d')) => Some(Message::Delete),
-            (_, KeyCode::Char('.')) => Some(Message::ToggleHidden),
+        match &mut self.mode {
+            Mode::Browsing => match (key.modifiers, key.code) {
+                (_, KeyCode::Char('q'))
+                | (KeyModifiers::CONTROL, KeyCode::Char('c') | KeyCode::Char('C')) => {
+                    Some(Message::Quit)
+                }
+                (_, KeyCode::Up | KeyCode::Char('k')) => Some(Message::MoveUp),
+                (_, KeyCode::Down | KeyCode::Char('j')) => Some(Message::MoveDown),
+                (_, KeyCode::Enter | KeyCode::Char('l') | KeyCode::Right) => Some(Message::Open),
+                (_, KeyCode::Backspace | KeyCode::Char('h') | KeyCode::Left) => {
+                    Some(Message::GoParent)
+                }
+                (_, KeyCode::Char('d')) => Some(Message::RequestDelete { permanent: false }),
+                (_, KeyCode::Char('D')) => Some(Message::RequestDelete { permanent: true }),
+                (_, KeyCode::Char('r')) => Some(Message::RequestRename),
+                (_, KeyCode::Char('.')) => Some(Message::ToggleHidden),
+                (_, KeyCode::Esc) => Some(Message::ToggleVisual),
 
-            _ => None,
+                _ => None,
+            },
+            Mode::ConfirmDelete { .. } => match (key.modifiers, key.code) {
+                (_, KeyCode::Char('y')) => Some(Message::ConfirmDelete),
+                (_, KeyCode::Char('n')) => Some(Message::CancelConfirm),
+                _ => None,
+            },
+            Mode::Rename { query } => match key.code {
+                KeyCode::Char('/') => None,
+                KeyCode::Char(c) => {
+                    query.push(c);
+                    None
+                }
+                KeyCode::Backspace => {
+                    query.pop();
+                    None
+                }
+                KeyCode::Enter => {
+                    // fire the actual rename, same two-step
+                    // confirm-pattern as delete: Action::ConfirmRename
+                    Some(Message::Rename)
+                }
+                KeyCode::Esc => Some(Message::CancelConfirm),
+                _ => None,
+            },
+            Mode::Visual => None,
         }
     }
 

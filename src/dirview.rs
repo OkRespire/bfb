@@ -109,6 +109,11 @@ impl DirView {
         };
         x.delete(remove).await?;
         self.refresh().await?;
+
+        // TODO: Change this so it is doing it dynamically
+        // at bounds its 0 and new_len - 1 and normal it is
+        // one item down, for now just put it to 0.
+        self.selected = 0;
         Ok(())
     }
 
