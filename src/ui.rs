@@ -60,14 +60,14 @@ impl App {
 
         let curr_file = self.dir_view.get_curr_file();
         let hint = Paragraph::new(self.mode_hint(curr_file.unwrap()))
-            .style(Style::new().fg(Color::Yellow).bg(Color::Red))
+            .style(Style::new().fg(Color::Gray).bg(Color::Black))
             .alignment(Alignment::Center);
 
         let permissions = match curr_file {
             Some(entry) => Paragraph::new(entry.permissions()),
             None => Paragraph::new(""),
         }
-        .style(Style::new().fg(Color::White).bg(Color::Red))
+        .style(Style::new().fg(Color::Black).bg(Color::Gray))
         .alignment(Alignment::Right);
         frame.render_widget(mode, mode_ch);
         frame.render_widget(permissions, permissions_ch);
