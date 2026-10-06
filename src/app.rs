@@ -9,14 +9,54 @@ use crossterm::{
 };
 use ratatui::DefaultTerminal;
 
-use crate::{config::Config, dirview::DirView, fs::EntryType};
+use crate::{
+    config::Config,
+    dirview::DirView,
+    fs::{EntryType, FileEntry},
+};
 
 #[derive(Debug)]
 pub enum Mode {
     Browsing,
     ConfirmDelete { permanent: bool },
-    Rename { query: String },
+    Rename { input: Input },
     Visual,
+}
+
+#[derive(Debug)]
+pub struct Input {
+    pub text: String,
+    pub cursor: usize,
+}
+
+impl Default for Input {
+    fn default() -> Self {
+        Self {
+            text: Default::default(),
+            cursor: Default::default(),
+        }
+    }
+}
+impl Input {
+    fn move_left(&mut self) {
+        if self.cursor > 0 {
+            self.cursor -= 1;
+
+            while !self.text.is_char_boundary(self.cursor) {
+                self.cursor -= 1;
+            }
+        }
+    }
+
+    fn move_right(&mut self) {
+        if self.cursor < self.text.len() {
+            self.cursor += 1;
+
+            while !self.text.is_char_boundary(self.cursor) {
+                self.cursor += 1;
+            }
+        }
+    }
 }
 
 impl Default for Mode {
@@ -34,7 +74,7 @@ pub enum Message {
     CancelConfirm,
     RequestDelete { permanent: bool },
     ConfirmDelete,
-    RequestRename,
+    RequestRename { curr_file: FileEntry },
     Rename,
     ToggleVisual,
 }
@@ -44,7 +84,7 @@ pub enum Command {
     OpenSelected,
     GoParent,
     Delete { permanent: bool },
-    Rename { name: String },
+    Rename { input: Input },
 }
 
 #[derive(Debug, Default)]
@@ -134,13 +174,12 @@ impl App {
             Command::Delete { permanent: normal } => {
                 self.dir_view.delete(normal).await?;
             }
-            Command::Rename { name } => self.dir_view.rename(name).await?,
+            Command::Rename { input } => self.dir_view.rename(input.text).await?,
         }
 
         Ok(())
     }
 
-    // TODO: Add Request, Confirm and Cancel Delete
     pub fn update(&mut self, action: Option<Message>) -> Command {
         if let Some(a) = action {
             match a {
@@ -171,18 +210,21 @@ impl App {
                     self.mode = Mode::ConfirmDelete { permanent }
                 }
                 Message::CancelConfirm => self.mode = Mode::Browsing,
-                Message::RequestRename => {
-                    self.mode = Mode::Rename {
-                        query: String::new(),
-                    }
+                Message::RequestRename { curr_file } => {
+                    let input = Input {
+                        text: curr_file.name.clone(),
+                        cursor: curr_file.name.len(),
+                    };
+                    self.mode = Mode::Rename { input }
                 }
                 Message::ToggleVisual => self.mode = Mode::Visual,
                 Message::Rename => {
-                    let Mode::Rename { query } = std::mem::replace(&mut self.mode, Mode::Browsing)
+                    let Mode::Rename { input: query } =
+                        std::mem::replace(&mut self.mode, Mode::Browsing)
                     else {
                         return Command::None;
                     };
-                    return Command::Rename { name: query };
+                    return Command::Rename { input: query };
                 }
             }
         }
@@ -190,7 +232,6 @@ impl App {
     }
 
     /// Handles the key events and updates the state of [`App`].
-    // TODO: Split browsing, confirm delete, and etc later
     pub fn on_key_event(&mut self, key: KeyEvent) -> Option<Message> {
         match &mut self.mode {
             Mode::Browsing => match (key.modifiers, key.code) {
@@ -206,25 +247,42 @@ impl App {
                 }
                 (_, KeyCode::Char('d')) => Some(Message::RequestDelete { permanent: false }),
                 (_, KeyCode::Char('D')) => Some(Message::RequestDelete { permanent: true }),
-                (_, KeyCode::Char('r')) => Some(Message::RequestRename),
+                (_, KeyCode::Char('r')) => {
+                    let curr_file = self.dir_view.get_curr_file().unwrap();
+                    Some(Message::RequestRename {
+                        curr_file: curr_file.clone(),
+                    })
+                }
                 (_, KeyCode::Char('.')) => Some(Message::ToggleHidden),
-                (_, KeyCode::Esc) => Some(Message::ToggleVisual),
+                (_, KeyCode::Char('v')) => Some(Message::ToggleVisual),
 
                 _ => None,
             },
             Mode::ConfirmDelete { .. } => match (key.modifiers, key.code) {
                 (_, KeyCode::Char('y')) => Some(Message::ConfirmDelete),
-                (_, KeyCode::Char('n')) => Some(Message::CancelConfirm),
+                (_, KeyCode::Char('n') | KeyCode::Esc) => Some(Message::CancelConfirm),
                 _ => None,
             },
-            Mode::Rename { query } => match key.code {
+            Mode::Rename { input: query } => match key.code {
                 KeyCode::Char('/') => None,
+                KeyCode::Left => {
+                    query.move_left();
+                    None
+                }
+                KeyCode::Right => {
+                    query.move_right();
+                    None
+                }
                 KeyCode::Char(c) => {
-                    query.push(c);
+                    query.text.insert(query.cursor, c);
+                    query.cursor += c.len_utf8();
                     None
                 }
                 KeyCode::Backspace => {
-                    query.pop();
+                    if query.cursor > 0 {
+                        query.move_left();
+                        query.text.remove(query.cursor);
+                    }
                     None
                 }
                 KeyCode::Enter => {
@@ -235,7 +293,10 @@ impl App {
                 KeyCode::Esc => Some(Message::CancelConfirm),
                 _ => None,
             },
-            Mode::Visual => None,
+            Mode::Visual => match key.code {
+                KeyCode::Esc => Some(Message::CancelConfirm),
+                _ => None,
+            },
         }
     }
 

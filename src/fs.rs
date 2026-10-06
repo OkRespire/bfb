@@ -168,6 +168,8 @@ impl FileEntry {
     }
 
     pub async fn rename(&self, name: String) -> Result<()> {
+        let new_path = self.path.with_file_name(&name);
+        fs::rename(&self.path, new_path).await?;
         Ok(())
     }
 

@@ -97,6 +97,7 @@ impl DirView {
             return Ok(());
         };
         x.rename(name).await?;
+        self.refresh().await?;
         Ok(())
     }
 
@@ -141,5 +142,12 @@ impl DirView {
 
     fn displayed_len(&self) -> usize {
         self.displayed().len()
+    }
+
+    pub fn get_curr_file(&self) -> Option<&FileEntry> {
+        match self.displayed().get(self.get_selected()) {
+            Some(entry) => Some(*entry),
+            None => None,
+        }
     }
 }

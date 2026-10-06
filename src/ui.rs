@@ -46,15 +46,10 @@ impl App {
 
         frame.render_widget(title, top);
         frame.render_stateful_widget(list, main_area, &mut list_state);
-        self.make_status_bar(status_chunks, &displayed, frame)
+        self.make_status_bar(status_chunks, frame)
     }
 
-    fn make_status_bar(
-        &self,
-        area: Rc<[Rect]>,
-        displayed: &Vec<&FileEntry>,
-        frame: &mut Frame<'_>,
-    ) {
+    fn make_status_bar(&self, area: Rc<[Rect]>, frame: &mut Frame<'_>) {
         let mode_ch = area[0];
         let action_ch = area[1];
         let permissions_ch = area[2];
@@ -63,13 +58,9 @@ impl App {
             .style(Style::new().fg(Color::Black).bg(Color::Gray))
             .alignment(Alignment::Center);
 
-        let curr_file = match displayed.get(self.dir_view.get_selected()) {
-            Some(entry) => Some(*entry),
-            None => None,
-        };
-
+        let curr_file = self.dir_view.get_curr_file();
         let hint = Paragraph::new(self.mode_hint(curr_file.unwrap()))
-            .style(Style::new().fg(Color::White).bg(Color::Red))
+            .style(Style::new().fg(Color::Yellow).bg(Color::Red))
             .alignment(Alignment::Center);
 
         let permissions = match curr_file {
@@ -81,6 +72,18 @@ impl App {
         frame.render_widget(mode, mode_ch);
         frame.render_widget(permissions, permissions_ch);
         frame.render_widget(hint, action_ch);
+        if let (Mode::Rename { input }, Some(curr_file)) = (&self.mode, curr_file) {
+            let prefix = format!("Renaming {}: ", curr_file.name);
+            let text = format!("{}{}", prefix, input.text);
+
+            let text_width = text.len() as u16;
+
+            let left_padding = action_ch.width.saturating_sub(text_width) / 2;
+
+            let cursor_x = action_ch.x + left_padding + prefix.len() as u16 + input.cursor as u16;
+
+            frame.set_cursor_position((cursor_x, action_ch.y));
+        }
     }
 
     fn bot_right_mode(&self) -> Paragraph<'_> {
@@ -102,8 +105,8 @@ impl App {
                 };
                 format!("Delete {} {}: y/n", curr_file.name, first_part)
             }
-            Mode::Rename { query } => {
-                format!("Renaming {}: {}", curr_file.name, query)
+            Mode::Rename { input: query } => {
+                format!("Renaming {}: {}", curr_file.name, query.text)
             }
             Mode::Visual => String::new(),
         }
