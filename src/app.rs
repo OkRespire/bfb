@@ -18,8 +18,9 @@ use crate::{
 #[derive(Debug)]
 pub enum Mode {
     Browsing,
-    ConfirmDelete { permanent: bool },
+    Delete { permanent: bool },
     Rename { input: Input },
+    Add { input: Input },
     Visual,
 }
 
@@ -77,6 +78,8 @@ pub enum Message {
     RequestRename { curr_file: FileEntry },
     Rename,
     ToggleVisual,
+    Add,
+    RequestAdd,
 }
 
 pub enum Command {
@@ -85,6 +88,7 @@ pub enum Command {
     GoParent,
     Delete { permanent: bool },
     Rename { input: Input },
+    Add { input: Input },
 }
 
 #[derive(Debug, Default)]
@@ -175,6 +179,7 @@ impl App {
                 self.dir_view.delete(normal).await?;
             }
             Command::Rename { input } => self.dir_view.rename(input.text).await?,
+            Command::Add { input } => self.dir_view.add(input.text).await?,
         }
 
         Ok(())
@@ -199,16 +204,14 @@ impl App {
                     self.quit();
                 }
                 Message::ConfirmDelete => {
-                    let Mode::ConfirmDelete { permanent } =
+                    let Mode::Delete { permanent } =
                         std::mem::replace(&mut self.mode, Mode::Browsing)
                     else {
                         return Command::None;
                     };
                     return Command::Delete { permanent };
                 }
-                Message::RequestDelete { permanent } => {
-                    self.mode = Mode::ConfirmDelete { permanent }
-                }
+                Message::RequestDelete { permanent } => self.mode = Mode::Delete { permanent },
                 Message::CancelConfirm => self.mode = Mode::Browsing,
                 Message::RequestRename { curr_file } => {
                     let input = Input {
@@ -219,12 +222,23 @@ impl App {
                 }
                 Message::ToggleVisual => self.mode = Mode::Visual,
                 Message::Rename => {
-                    let Mode::Rename { input: query } =
-                        std::mem::replace(&mut self.mode, Mode::Browsing)
+                    let Mode::Rename { input } = std::mem::replace(&mut self.mode, Mode::Browsing)
                     else {
                         return Command::None;
                     };
-                    return Command::Rename { input: query };
+                    return Command::Rename { input };
+                }
+                Message::Add => {
+                    let Mode::Add { input } = std::mem::replace(&mut self.mode, Mode::Browsing)
+                    else {
+                        return Command::None;
+                    };
+                    return Command::Add { input };
+                }
+                Message::RequestAdd => {
+                    self.mode = Mode::Add {
+                        input: Input::default(),
+                    }
                 }
             }
         }
@@ -254,34 +268,35 @@ impl App {
                     })
                 }
                 (_, KeyCode::Char('.')) => Some(Message::ToggleHidden),
+                (_, KeyCode::Char('a')) => Some(Message::RequestAdd),
                 (_, KeyCode::Char('v')) => Some(Message::ToggleVisual),
 
                 _ => None,
             },
-            Mode::ConfirmDelete { .. } => match (key.modifiers, key.code) {
+            Mode::Delete { .. } => match (key.modifiers, key.code) {
                 (_, KeyCode::Char('y')) => Some(Message::ConfirmDelete),
                 (_, KeyCode::Char('n') | KeyCode::Esc) => Some(Message::CancelConfirm),
                 _ => None,
             },
-            Mode::Rename { input: query } => match key.code {
+            Mode::Rename { input } => match key.code {
                 KeyCode::Char('/') => None,
                 KeyCode::Left => {
-                    query.move_left();
+                    input.move_left();
                     None
                 }
                 KeyCode::Right => {
-                    query.move_right();
+                    input.move_right();
                     None
                 }
                 KeyCode::Char(c) => {
-                    query.text.insert(query.cursor, c);
-                    query.cursor += c.len_utf8();
+                    input.text.insert(input.cursor, c);
+                    input.cursor += c.len_utf8();
                     None
                 }
                 KeyCode::Backspace => {
-                    if query.cursor > 0 {
-                        query.move_left();
-                        query.text.remove(query.cursor);
+                    if input.cursor > 0 {
+                        input.move_left();
+                        input.text.remove(input.cursor);
                     }
                     None
                 }
@@ -294,6 +309,35 @@ impl App {
                 _ => None,
             },
             Mode::Visual => match key.code {
+                KeyCode::Esc => Some(Message::CancelConfirm),
+                _ => None,
+            },
+            Mode::Add { input } => match key.code {
+                KeyCode::Left => {
+                    input.move_left();
+                    None
+                }
+                KeyCode::Right => {
+                    input.move_right();
+                    None
+                }
+                KeyCode::Char(c) => {
+                    input.text.insert(input.cursor, c);
+                    input.cursor += c.len_utf8();
+                    None
+                }
+                KeyCode::Backspace => {
+                    if input.cursor > 0 {
+                        input.move_left();
+                        input.text.remove(input.cursor);
+                    }
+                    None
+                }
+                KeyCode::Enter => {
+                    // fire the actual rename, same two-step
+                    // confirm-pattern as delete: Action::ConfirmRename
+                    Some(Message::Add)
+                }
                 KeyCode::Esc => Some(Message::CancelConfirm),
                 _ => None,
             },

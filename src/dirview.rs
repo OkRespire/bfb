@@ -1,5 +1,6 @@
 use color_eyre::Result;
-use std::{fs, path::PathBuf};
+use std::{io::ErrorKind, path::PathBuf};
+use tokio::fs;
 
 use crate::fs::{EntryType, FileEntry, get_files, part_files};
 
@@ -149,5 +150,34 @@ impl DirView {
             Some(entry) => Some(*entry),
             None => None,
         }
+    }
+
+    pub async fn add(&mut self, text: String) -> Result<()> {
+        let text = text.trim();
+        let ends_in_slash = text.ends_with('/');
+        let parts: Vec<&str> = text.split('/').filter(|s| !s.is_empty()).collect();
+        if text.is_empty() {
+            return Ok(());
+        }
+        let mut current = self.cwd.clone();
+        for (i, part) in parts.iter().enumerate() {
+            current.push(part);
+
+            if parts.len() - 1 == i && !ends_in_slash {
+                match fs::File::create_new(&current).await {
+                    Ok(_) => {}
+                    Err(e) if e.kind() == ErrorKind::AlreadyExists => {}
+                    Err(e) => return Err(e.into()),
+                };
+            } else {
+                match fs::create_dir(&current).await {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == ErrorKind::AlreadyExists => {}
+                    Err(e) => return Err(e.into()),
+                }
+            }
+        }
+        self.refresh().await?;
+        Ok(())
     }
 }

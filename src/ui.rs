@@ -58,8 +58,11 @@ impl App {
             .style(Style::new().fg(Color::Black).bg(Color::Gray))
             .alignment(Alignment::Center);
 
-        let curr_file = self.dir_view.get_curr_file();
-        let hint = Paragraph::new(self.mode_hint(curr_file.unwrap()))
+        let curr_file = match self.dir_view.get_curr_file() {
+            Some(f) => Some(f),
+            None => None,
+        };
+        let hint = Paragraph::new(self.mode_hint(curr_file))
             .style(Style::new().fg(Color::Gray).bg(Color::Black))
             .alignment(Alignment::Center);
 
@@ -88,16 +91,20 @@ impl App {
 
     fn bot_right_mode(&self) -> Paragraph<'_> {
         match self.mode {
-            Mode::Browsing | Mode::Rename { .. } | Mode::ConfirmDelete { .. } => {
+            Mode::Browsing | Mode::Rename { .. } | Mode::Delete { .. } | Mode::Add { .. } => {
                 Paragraph::new("NORMAL")
             }
             Mode::Visual => Paragraph::new("VISUAL"),
         }
     }
-    fn mode_hint(&self, curr_file: &FileEntry) -> String {
+    fn mode_hint(&self, cf: Option<&FileEntry>) -> String {
+        let curr_file = match cf {
+            Some(e) => e,
+            None => return String::new(),
+        };
         match &self.mode {
             Mode::Browsing => String::new(),
-            Mode::ConfirmDelete { permanent } => {
+            Mode::Delete { permanent } => {
                 let first_part = if *permanent {
                     "PERMANENTLY".to_string()
                 } else {
@@ -105,8 +112,11 @@ impl App {
                 };
                 format!("Delete {} {}: y/n", curr_file.name, first_part)
             }
-            Mode::Rename { input: query } => {
-                format!("Renaming {}: {}", curr_file.name, query.text)
+            Mode::Rename { input } => {
+                format!("Renaming {}: {}", curr_file.name, input.text)
+            }
+            Mode::Add { input } => {
+                format!("Creating: {}", input.text)
             }
             Mode::Visual => String::new(),
         }
