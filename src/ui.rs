@@ -100,7 +100,12 @@ impl App {
     fn mode_hint(&self, cf: Option<&FileEntry>) -> String {
         let curr_file = match cf {
             Some(e) => e,
-            None => return String::new(),
+            None => match &self.mode {
+                Mode::Add { input } => {
+                    return format!("Creating: {}", input.text);
+                }
+                _ => return String::new(),
+            },
         };
         match &self.mode {
             Mode::Browsing => String::new(),
