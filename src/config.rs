@@ -1,10 +1,8 @@
 #[derive(Debug)]
-pub struct Config {
-}
+pub struct Config {}
 
 impl Default for Config {
     fn default() -> Self {
-        Self {
-        }
+        Self {}
     }
 }

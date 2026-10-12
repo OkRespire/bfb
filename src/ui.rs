@@ -58,10 +58,7 @@ impl App {
             .style(Style::new().fg(Color::Black).bg(Color::Gray))
             .alignment(Alignment::Center);
 
-        let curr_file = match self.dir_view.get_curr_file() {
-            Some(f) => Some(f),
-            None => None,
-        };
+        let curr_file = self.dir_view.get_curr_file().map(|f| f);
         let hint = Paragraph::new(self.mode_hint(curr_file))
             .style(Style::new().fg(Color::Gray).bg(Color::Black))
             .alignment(Alignment::Center);

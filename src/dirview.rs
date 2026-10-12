@@ -12,6 +12,7 @@ pub struct DirView {
     pub hidden: Vec<FileEntry>,
     pub is_hidden: bool,
     pub selected: usize,
+    pub yanked: Option<FileEntry>,
 }
 impl DirView {
     pub async fn new(cwd: PathBuf) -> Result<Self> {
@@ -24,6 +25,7 @@ impl DirView {
             is_hidden: false,
             selected: 0,
             cwd,
+            yanked: None,
         })
     }
 
@@ -119,6 +121,52 @@ impl DirView {
         Ok(())
     }
 
+    pub fn copy(&mut self) -> Result<()> {
+        let displayed = self.displayed();
+        let yanked = if let Some(f) = displayed.get(self.selected) {
+            (*f).clone()
+        } else {
+            return Ok(());
+        };
+
+        self.yanked = Some(yanked);
+
+        Ok(())
+    }
+
+    pub async fn paste(&mut self) -> Result<()> {
+        let f = match &self.yanked {
+            Some(f) => f,
+            None => return Ok(()),
+        };
+
+        match f.ent_type {
+            EntryType::File | EntryType::Symlink { .. } => {
+                let mut candidate = self.cwd.join(&f.name);
+                let mut n = 1;
+                while candidate.exists() {
+                    let stem = f.path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                    let ext = f.path.extension().and_then(|s| s.to_str());
+
+                    let new_name = match ext {
+                        Some(ext) => format!("{}_{}.{}", stem, n, ext),
+                        None => format!("{}_{}", stem, n),
+                    };
+                    candidate = self.cwd.join(new_name);
+                    n += 1
+                }
+                fs::copy(&f.path, candidate).await?;
+            }
+            EntryType::Directory => self.paste_dir().await?,
+        }
+        self.yanked = None;
+        Ok(())
+    }
+
+    pub async fn paste_dir(&self) -> Result<()> {
+        Ok(())
+    }
+
     pub async fn refresh(&mut self) -> Result<()> {
         let new_files = get_files(&self.cwd).await?;
         self.set_files(new_files);
@@ -160,6 +208,8 @@ impl DirView {
             return Ok(());
         }
         let mut current = self.cwd.clone();
+
+        // TODO: Add custom error so the UI can display
         for (i, part) in parts.iter().enumerate() {
             current.push(part);
 

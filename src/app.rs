@@ -15,29 +15,28 @@ use crate::{
     fs::{EntryType, FileEntry},
 };
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub enum Mode {
+    #[default]
     Browsing,
-    Delete { permanent: bool },
-    Rename { input: Input },
-    Add { input: Input },
+    Delete {
+        permanent: bool,
+    },
+    Rename {
+        input: Input,
+    },
+    Add {
+        input: Input,
+    },
     Visual,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Input {
     pub text: String,
     pub cursor: usize,
 }
 
-impl Default for Input {
-    fn default() -> Self {
-        Self {
-            text: Default::default(),
-            cursor: Default::default(),
-        }
-    }
-}
 impl Input {
     fn move_left(&mut self) {
         if self.cursor > 0 {
@@ -60,11 +59,6 @@ impl Input {
     }
 }
 
-impl Default for Mode {
-    fn default() -> Self {
-        Self::Browsing
-    }
-}
 pub enum Message {
     MoveUp,
     MoveDown,
