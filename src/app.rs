@@ -74,6 +74,8 @@ pub enum Message {
     ToggleVisual,
     Add,
     RequestAdd,
+    Yank,
+    Paste,
 }
 
 pub enum Command {
@@ -83,6 +85,8 @@ pub enum Command {
     Delete { permanent: bool },
     Rename { input: Input },
     Add { input: Input },
+    Yank,
+    Paste,
 }
 
 #[derive(Debug, Default)]
@@ -174,6 +178,8 @@ impl App {
             }
             Command::Rename { input } => self.dir_view.rename(input.text).await?,
             Command::Add { input } => self.dir_view.add(input.text).await?,
+            Command::Yank => self.dir_view.copy()?,
+            Command::Paste => self.dir_view.paste().await?,
         }
 
         Ok(())
@@ -234,6 +240,8 @@ impl App {
                         input: Input::default(),
                     }
                 }
+                Message::Yank => return Command::Yank,
+                Message::Paste => return Command::Paste,
             }
         }
         Command::None
@@ -264,6 +272,8 @@ impl App {
                 (_, KeyCode::Char('.')) => Some(Message::ToggleHidden),
                 (_, KeyCode::Char('a')) => Some(Message::RequestAdd),
                 (_, KeyCode::Char('v')) => Some(Message::ToggleVisual),
+                (_, KeyCode::Char('y')) => Some(Message::Yank),
+                (_, KeyCode::Char('p')) => Some(Message::Paste),
 
                 _ => None,
             },

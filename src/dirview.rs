@@ -1,5 +1,9 @@
 use color_eyre::Result;
-use std::{io::ErrorKind, path::PathBuf};
+use std::{
+    fs::File,
+    io::ErrorKind,
+    path::{Path, PathBuf},
+};
 use tokio::fs;
 
 use crate::fs::{EntryType, FileEntry, get_files, part_files};
@@ -130,6 +134,7 @@ impl DirView {
         };
 
         self.yanked = Some(yanked);
+        tracing::debug!(?self.yanked, "yanked file");
 
         Ok(())
     }
@@ -143,6 +148,7 @@ impl DirView {
         match f.ent_type {
             EntryType::File | EntryType::Symlink { .. } => {
                 let mut candidate = self.cwd.join(&f.name);
+                tracing::debug!(?candidate, "file to be pasted");
                 let mut n = 1;
                 while candidate.exists() {
                     let stem = f.path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
@@ -157,13 +163,46 @@ impl DirView {
                 }
                 fs::copy(&f.path, candidate).await?;
             }
-            EntryType::Directory => self.paste_dir().await?,
+            EntryType::Directory => {
+                tracing::debug!(?f.name, "folder to be pasted");
+                let mut candidate = self.cwd.join(&f.name);
+                tracing::debug!(?candidate, "file to be pasted");
+                let mut n = 1;
+                while candidate.exists() {
+                    let stem = f.path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                    let ext = f.path.extension().and_then(|s| s.to_str());
+
+                    let new_name = match ext {
+                        Some(ext) => format!("{}_{}.{}", stem, n, ext),
+                        None => format!("{}_{}", stem, n),
+                    };
+                    candidate = self.cwd.join(new_name);
+                    n += 1
+                }
+                let src = f.path.clone();
+                let dest = self.cwd.join(candidate);
+                self.paste_dir(&src, &dest).await?
+            }
         }
+        self.refresh().await?;
         self.yanked = None;
         Ok(())
     }
 
-    pub async fn paste_dir(&self) -> Result<()> {
+    async fn paste_dir(&self, src: &Path, dest: &Path) -> Result<()> {
+        fs::create_dir(dest).await?;
+        let mut entries = fs::read_dir(src).await?;
+        while let Some(entry) = entries.next_entry().await? {
+            let src_path = entry.path();
+            let dest_path = dest.join(entry.file_name());
+            let ft = entry.file_type().await?;
+
+            if ft.is_dir() {
+                Box::pin(self.paste_dir(&src_path, &dest_path)).await?;
+            } else {
+                fs::copy(&src_path, &dest_path).await?;
+            }
+        }
         Ok(())
     }
 
