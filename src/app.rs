@@ -1,5 +1,5 @@
 use futures::{FutureExt, StreamExt};
-use std::{env, process::Stdio};
+use std::{env, io::ErrorKind, process::Stdio};
 
 use color_eyre::Result;
 use crossterm::{
@@ -12,6 +12,7 @@ use ratatui::DefaultTerminal;
 use crate::{
     config::Config,
     dirview::DirView,
+    error::UiError,
     fs::{EntryType, FileEntry},
 };
 
@@ -96,6 +97,7 @@ pub struct App {
     // Event stream.
     pub event_stream: EventStream,
     pub dir_view: DirView,
+    pub error: Option<UiError>,
     pub config: Config,
     pub mode: Mode,
 }
@@ -110,6 +112,7 @@ impl App {
             event_stream: EventStream::default(),
             config: Config::default(),
             dir_view,
+            error: None,
             mode: Mode::default(),
         })
     }
@@ -177,7 +180,11 @@ impl App {
                 self.dir_view.delete(normal).await?;
             }
             Command::Rename { input } => self.dir_view.rename(input.text).await?,
-            Command::Add { input } => self.dir_view.add(input.text).await?,
+            Command::Add { input } => {
+                if let Err(e) = self.dir_view.add(input.text).await {
+                    self.error = Some(e);
+                }
+            }
             Command::Yank => self.dir_view.copy()?,
             Command::Paste => self.dir_view.paste().await?,
         }

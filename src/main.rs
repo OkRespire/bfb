@@ -1,6 +1,7 @@
 mod app;
 mod config;
 mod dirview;
+mod error;
 mod fs;
 mod ui;
 

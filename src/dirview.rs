@@ -1,12 +1,14 @@
 use color_eyre::Result;
 use std::{
-    fs::File,
     io::ErrorKind,
     path::{Path, PathBuf},
 };
 use tokio::fs;
 
-use crate::fs::{EntryType, FileEntry, get_files, part_files};
+use crate::{
+    error::UiError,
+    fs::{EntryType, FileEntry, get_files, part_files},
+};
 
 #[derive(Debug, Default)]
 pub struct DirView {
@@ -116,12 +118,13 @@ impl DirView {
             return Ok(());
         };
         x.delete(remove).await?;
+        if displayed.len() == 1 {
+            self.selected = 0;
+        } else {
+            self.selected = self.selected.saturating_sub(1);
+        }
         self.refresh().await?;
 
-        // TODO: Change this so it is doing it dynamically
-        // at bounds its 0 and new_len - 1 and normal it is
-        // one item down, for now just put it to 0.
-        self.selected = 0;
         Ok(())
     }
 
@@ -239,7 +242,7 @@ impl DirView {
         }
     }
 
-    pub async fn add(&mut self, text: String) -> Result<()> {
+    pub async fn add(&mut self, text: String) -> Result<(), UiError> {
         let text = text.trim();
         let ends_in_slash = text.ends_with('/');
         let parts: Vec<&str> = text.split('/').filter(|s| !s.is_empty()).collect();
@@ -248,25 +251,39 @@ impl DirView {
         }
         let mut current = self.cwd.clone();
 
-        // TODO: Add custom error so the UI can display
         for (i, part) in parts.iter().enumerate() {
+            let is_last = i == parts.len() - 1;
             current.push(part);
 
             if parts.len() - 1 == i && !ends_in_slash {
                 match fs::File::create_new(&current).await {
                     Ok(_) => {}
-                    Err(e) if e.kind() == ErrorKind::AlreadyExists => {}
-                    Err(e) => return Err(e.into()),
+                    Err(e) => return Err(UiError::from_io(e, &current)),
                 };
             } else {
                 match fs::create_dir(&current).await {
-                    Ok(()) => {}
-                    Err(e) if e.kind() == ErrorKind::AlreadyExists => {}
-                    Err(e) => return Err(e.into()),
+                    Ok(_) => {}
+                    Err(e) if e.kind() == ErrorKind::AlreadyExists && !is_last => {
+                        let meta = fs::metadata(&current)
+                            .await
+                            .map_err(|e| UiError::from_io(e, &current))?;
+                        if !meta.is_dir() {
+                            return Err(UiError::AlreadyExists(current));
+                        }
+                    }
+                    Err(e) => return Err(UiError::from_io(e, &current)),
                 }
             }
         }
-        self.refresh().await?;
+        match self.refresh().await {
+            Ok(_) => {}
+            Err(e) => {
+                return Err(UiError::Refresh {
+                    path: self.cwd.clone(),
+                    message: format!("{e:#}"),
+                });
+            }
+        };
         Ok(())
     }
 }
