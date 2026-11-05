@@ -11,8 +11,6 @@ pub enum UiError {
     PermissionDenied(PathBuf),
     #[error("{0} no longer exists")]
     NotFound(PathBuf),
-    #[error("can't paste a directory into itself")]
-    PasteIntoSelf,
     #[error("{path}: {source}")]
     Io {
         path: PathBuf,
@@ -20,6 +18,8 @@ pub enum UiError {
     },
     #[error("couldn't reload {path}: {message}")]
     Refresh { path: PathBuf, message: String },
+    #[error("{path}: {description}")]
+    Other { path: PathBuf, description: String },
 }
 
 impl UiError {
@@ -31,6 +31,15 @@ impl UiError {
             _ => Self::Io {
                 path: path.to_owned(),
                 source: e,
+            },
+        }
+    }
+    pub fn from_report(e: color_eyre::Report, path: &Path) -> Self {
+        match e.downcast::<std::io::Error>() {
+            Ok(io) => Self::from_io(io, path),
+            Err(report) => Self::Other {
+                path: path.to_owned(),
+                description: format!("{report:#}"),
             },
         }
     }

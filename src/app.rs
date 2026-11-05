@@ -1,5 +1,5 @@
 use futures::{FutureExt, StreamExt};
-use std::{env, io::ErrorKind, process::Stdio};
+use std::{env, process::Stdio};
 
 use color_eyre::Result;
 use crossterm::{
@@ -134,16 +134,19 @@ impl App {
             execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
             let res = f.edit_file().await;
             enable_raw_mode()?;
-            execute!(terminal.backend_mut(), EnterAlternateScreen,)?;
+            execute!(terminal.backend_mut(), EnterAlternateScreen)?;
             terminal.clear()?;
-            // allows for the terminal to recover itself
-            res?
-        } else {
-            tokio::process::Command::new("xdg-open")
-                .arg(&f.path)
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()?;
+            // terminal is restored, so now it's safe to report the editor's failure
+            if let Err(e) = res {
+                self.error = Some(UiError::from_report(e, &f.path));
+            }
+        } else if let Err(e) = tokio::process::Command::new("xdg-open")
+            .arg(&f.path)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+        {
+            self.error = Some(UiError::from_io(e, &f.path));
         }
         Ok(())
     }
@@ -159,13 +162,19 @@ impl App {
                 if let Some(e) = self.dir_view.get_entry_type().await {
                     match e {
                         EntryType::Directory => {
-                            self.dir_view.open_dir().await?;
+                            if let Err(e) = self.dir_view.open_dir().await {
+                                self.error = Some(e);
+                            };
                         }
-                        EntryType::File => self.handle_file(terminal).await?,
+                        EntryType::File => {
+                            self.handle_file(terminal).await?;
+                        }
                         EntryType::Symlink { is_dir, .. } => match is_dir {
                             Some(a) => {
                                 if a {
-                                    self.dir_view.open_dir().await?;
+                                    if let Err(e) = self.dir_view.open_dir().await {
+                                        self.error = Some(e);
+                                    };
                                 } else {
                                     self.handle_file(terminal).await?;
                                 }
@@ -177,7 +186,9 @@ impl App {
             }
             Command::GoParent => self.dir_view.go_parent().await?,
             Command::Delete { permanent: normal } => {
-                self.dir_view.delete(normal).await?;
+                if let Err(e) = self.dir_view.delete(normal).await {
+                    self.error = Some(e)
+                }
             }
             Command::Rename { input } => self.dir_view.rename(input.text).await?,
             Command::Add { input } => {
@@ -185,8 +196,12 @@ impl App {
                     self.error = Some(e);
                 }
             }
-            Command::Yank => self.dir_view.copy()?,
-            Command::Paste => self.dir_view.paste().await?,
+            Command::Yank => self.dir_view.copy(),
+            Command::Paste => {
+                if let Err(e) = self.dir_view.paste().await {
+                    self.error = Some(e)
+                }
+            }
         }
 
         Ok(())
@@ -364,6 +379,7 @@ impl App {
         match event {
             Some(Ok(evt)) => match evt {
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
+                    self.error = None;
                     let action = self.on_key_event(key);
                     let command = self.update(action);
                     self.handle_command(command, terminal).await?;

@@ -35,11 +35,14 @@ impl App {
 
         let title = Paragraph::new(self.dir_view.cwd.to_string_lossy());
 
-        let list_item: Vec<ListItem> = displayed
-            .iter()
-            .map(|p| ListItem::new(format!("{}", p)))
-            .collect();
-
+        let list_item = if displayed.is_empty() {
+            [ListItem::new("Your files are in another folder")].to_vec()
+        } else {
+            displayed
+                .into_iter()
+                .map(|p| ListItem::new(format!("{}", p)))
+                .collect()
+        };
         let list = List::new(list_item).highlight_symbol("> ");
 
         let mut list_state = ListState::default().with_selected(Some(self.dir_view.get_selected()));
@@ -95,6 +98,10 @@ impl App {
         }
     }
     fn mode_hint(&self, cf: Option<&FileEntry>) -> String {
+        match &self.error {
+            Some(e) => return e.to_string(),
+            None => {}
+        }
         let curr_file = match cf {
             Some(e) => e,
             None => match &self.mode {

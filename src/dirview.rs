@@ -56,7 +56,7 @@ impl DirView {
         Some(file.ent_type)
     }
 
-    pub async fn open_dir(&mut self) -> Result<()> {
+    pub async fn open_dir(&mut self) -> Result<(), UiError> {
         let idx = &self.selected;
         let file = self.displayed()[*idx].clone();
         let path = match file.ent_type {
@@ -65,7 +65,10 @@ impl DirView {
             EntryType::Symlink { path, .. } => path,
         };
         self.selected = 0;
-        let new_files = get_files(&path).await?;
+        let new_files = match get_files(&path).await {
+            Ok(f) => f,
+            Err(e) => return Err(UiError::from_report(e, &path)),
+        };
         self.set_files(new_files);
         self.history.push(self.cwd.clone());
         self.cwd = path;
@@ -110,39 +113,47 @@ impl DirView {
         Ok(())
     }
 
-    pub async fn delete(&mut self, remove: bool) -> Result<()> {
+    pub async fn delete(&mut self, remove: bool) -> Result<(), UiError> {
         let displayed = self.displayed();
         let x = if let Some(f) = displayed.get(self.selected) {
             f
         } else {
             return Ok(());
         };
-        x.delete(remove).await?;
+        x.delete(remove)
+            .await
+            .map_err(|e| UiError::from_report(e, &x.path))?;
         if displayed.len() == 1 {
             self.selected = 0;
         } else {
             self.selected = self.selected.saturating_sub(1);
         }
-        self.refresh().await?;
+        match self.refresh().await {
+            Ok(_) => {}
+            Err(e) => {
+                return Err(UiError::Refresh {
+                    path: self.cwd.clone(),
+                    message: format!("{e:#}"),
+                });
+            }
+        };
 
         Ok(())
     }
 
-    pub fn copy(&mut self) -> Result<()> {
+    pub fn copy(&mut self) {
         let displayed = self.displayed();
         let yanked = if let Some(f) = displayed.get(self.selected) {
             (*f).clone()
         } else {
-            return Ok(());
+            return;
         };
 
         self.yanked = Some(yanked);
         tracing::debug!(?self.yanked, "yanked file");
-
-        Ok(())
     }
 
-    pub async fn paste(&mut self) -> Result<()> {
+    pub async fn paste(&mut self) -> Result<(), UiError> {
         let f = match &self.yanked {
             Some(f) => f,
             None => return Ok(()),
@@ -164,7 +175,10 @@ impl DirView {
                     candidate = self.cwd.join(new_name);
                     n += 1
                 }
-                fs::copy(&f.path, candidate).await?;
+                match fs::copy(&f.path, candidate).await {
+                    Ok(_) => {}
+                    Err(e) => return Err(UiError::from_io(e, &f.path)),
+                };
             }
             EntryType::Directory => {
                 tracing::debug!(?f.name, "folder to be pasted");
@@ -187,23 +201,48 @@ impl DirView {
                 self.paste_dir(&src, &dest).await?
             }
         }
-        self.refresh().await?;
         self.yanked = None;
+        match self.refresh().await {
+            Ok(_) => {}
+            Err(e) => {
+                return Err(UiError::Refresh {
+                    path: self.cwd.clone(),
+                    message: format!("{e:#}"),
+                });
+            }
+        };
         Ok(())
     }
 
-    async fn paste_dir(&self, src: &Path, dest: &Path) -> Result<()> {
-        fs::create_dir(dest).await?;
-        let mut entries = fs::read_dir(src).await?;
-        while let Some(entry) = entries.next_entry().await? {
+    async fn paste_dir(&self, src: &Path, dest: &Path) -> Result<(), UiError> {
+        match fs::create_dir(dest).await {
+            Ok(_) => {}
+            Err(e) => return Err(UiError::from_io(e, &dest)),
+        };
+
+        let mut entries = match fs::read_dir(src).await {
+            Ok(r) => r,
+            Err(e) => return Err(UiError::from_io(e, &src)),
+        };
+
+        while let Some(entry) = match entries.next_entry().await {
+            Ok(e) => e,
+            Err(e) => return Err(UiError::from_io(e, &src)),
+        } {
             let src_path = entry.path();
             let dest_path = dest.join(entry.file_name());
-            let ft = entry.file_type().await?;
+            let ft = match entry.file_type().await {
+                Ok(ft) => ft,
+                Err(e) => return Err(UiError::from_io(e, &entry.path())),
+            };
 
             if ft.is_dir() {
                 Box::pin(self.paste_dir(&src_path, &dest_path)).await?;
             } else {
-                fs::copy(&src_path, &dest_path).await?;
+                match fs::copy(&src_path, &dest_path).await {
+                    Ok(_) => {}
+                    Err(e) => return Err(UiError::from_io(e, &src_path)),
+                };
             }
         }
         Ok(())
