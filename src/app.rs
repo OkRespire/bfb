@@ -3,11 +3,18 @@ use std::{env, process::Stdio};
 
 use color_eyre::Result;
 use crossterm::{
-    event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
+    event::{
+        Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
+        MouseEventKind,
+    },
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use ratatui::DefaultTerminal;
+use ratatui::{
+    DefaultTerminal,
+    layout::{Position, Rect},
+    widgets::ListState,
+};
 
 use crate::{
     config::Config,
@@ -77,6 +84,7 @@ pub enum Message {
     RequestAdd,
     Yank,
     Paste,
+    SelectRow(usize),
 }
 
 pub enum Command {
@@ -100,6 +108,8 @@ pub struct App {
     pub error: Option<UiError>,
     pub config: Config,
     pub mode: Mode,
+    pub list_state: ListState,
+    pub list_area: Rect,
 }
 
 impl App {
@@ -114,6 +124,8 @@ impl App {
             dir_view,
             error: None,
             mode: Mode::default(),
+            list_state: ListState::default(),
+            list_area: Rect::default(),
         })
     }
 
@@ -264,6 +276,9 @@ impl App {
                 }
                 Message::Yank => return Command::Yank,
                 Message::Paste => return Command::Paste,
+                Message::SelectRow(i) => {
+                    self.dir_view.select(i);
+                }
             }
         }
         Command::None
@@ -370,6 +385,25 @@ impl App {
         }
     }
 
+    pub fn on_mouse_event(&self, mouse: MouseEvent) -> Option<Message> {
+        match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                let pos = Position::new(mouse.column, mouse.row);
+                if !self.list_area.contains(pos) {
+                    return None;
+                }
+
+                let idx = (mouse.row - self.list_area.y) as usize + self.list_state.offset();
+                if idx == self.dir_view.get_selected() {
+                    return Some(Message::Open);
+                }
+                let len = self.dir_view.displayed().len();
+                (idx < len).then_some(Message::SelectRow(idx))
+            }
+            _ => None,
+        }
+    }
+
     /// Reads the crossterm events and updates the state of [`App`].
     pub async fn handle_crossterm_events(
         &mut self,
@@ -380,11 +414,15 @@ impl App {
             Some(Ok(evt)) => match evt {
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
                     self.error = None;
-                    let action = self.on_key_event(key);
-                    let command = self.update(action);
+                    let message = self.on_key_event(key);
+                    let command = self.update(message);
                     self.handle_command(command, terminal).await?;
                 }
-                Event::Mouse(_) => {}
+                Event::Mouse(m) => {
+                    let message = self.on_mouse_event(m);
+                    let command = self.update(message);
+                    self.handle_command(command, terminal).await?;
+                }
                 Event::Resize(_, _) => {}
                 _ => {}
             },

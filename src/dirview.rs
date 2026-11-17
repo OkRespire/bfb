@@ -325,4 +325,10 @@ impl DirView {
         };
         Ok(())
     }
+
+    pub(crate) fn select(&mut self, i: usize) {
+        if i < self.displayed().len() {
+            self.selected = i;
+        }
+    }
 }

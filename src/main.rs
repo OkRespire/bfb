@@ -5,7 +5,13 @@ mod error;
 mod fs;
 mod ui;
 
+use std::io::stdout;
+
 use color_eyre::Result;
+use crossterm::{
+    event::{DisableMouseCapture, EnableMouseCapture},
+    execute,
+};
 use tracing_appender::rolling;
 use tracing_subscriber::{EnvFilter, fmt};
 
@@ -17,8 +23,11 @@ async fn main() -> Result<()> {
     let _guard = init_logging();
     tracing::info!("bfb starting up");
 
+    let app = App::new().await?;
     let terminal = ratatui::init();
-    let result = App::new().await?.run(terminal).await;
+    execute!(stdout(), EnableMouseCapture)?;
+    let result = app.run(terminal).await;
+    let _ = execute!(stdout(), DisableMouseCapture);
     ratatui::restore();
     result
 }

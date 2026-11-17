@@ -32,6 +32,7 @@ impl App {
         ])
         .split(status_area);
         let displayed = self.dir_view.displayed();
+        self.list_area = main_area;
 
         let title = Paragraph::new(self.dir_view.cwd.to_string_lossy());
 
@@ -45,10 +46,10 @@ impl App {
         };
         let list = List::new(list_item).highlight_symbol("> ");
 
-        let mut list_state = ListState::default().with_selected(Some(self.dir_view.get_selected()));
+        self.list_state.select(Some(self.dir_view.get_selected()));
 
         frame.render_widget(title, top);
-        frame.render_stateful_widget(list, main_area, &mut list_state);
+        frame.render_stateful_widget(list, main_area, &mut self.list_state);
         self.make_status_bar(status_chunks, frame)
     }
 
