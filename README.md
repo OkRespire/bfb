@@ -9,6 +9,7 @@ A simple TUI file browser built with ratatui. WIP. This is mostly a learning pro
 - ENTER/l/right -> open
 - BACKSPACE/h/left -> go to parent directory
 - ESC/q/Ctrl+C -> Close
+- Left Mouse Button - Select/Open
 
 ## Features
 - Directory Traversal
