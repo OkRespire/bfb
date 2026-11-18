@@ -1,11 +1,11 @@
 use futures::{FutureExt, StreamExt};
-use std::{env, process::Stdio};
+use std::{env, io::stdout, process::Stdio};
 
 use color_eyre::Result;
 use crossterm::{
     event::{
-        Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
-        MouseEventKind,
+        DisableMouseCapture, EnableMouseCapture, Event, EventStream, KeyCode, KeyEvent,
+        KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
     },
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
@@ -13,7 +13,7 @@ use crossterm::{
 use ratatui::{
     DefaultTerminal,
     layout::{Position, Rect},
-    widgets::ListState,
+    widgets::TableState,
 };
 
 use crate::{
@@ -108,8 +108,8 @@ pub struct App {
     pub error: Option<UiError>,
     pub config: Config,
     pub mode: Mode,
-    pub list_state: ListState,
-    pub list_area: Rect,
+    pub table_state: TableState,
+    pub table_area: Rect,
 }
 
 impl App {
@@ -124,8 +124,8 @@ impl App {
             dir_view,
             error: None,
             mode: Mode::default(),
-            list_state: ListState::default(),
-            list_area: Rect::default(),
+            table_state: TableState::default(),
+            table_area: Rect::default(),
         })
     }
 
@@ -143,10 +143,13 @@ impl App {
         let (f, is_txt) = self.dir_view.check_file().await?;
         if is_txt {
             disable_raw_mode()?;
+            let _ = execute!(terminal.backend_mut(), DisableMouseCapture);
             execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
             let res = f.edit_file().await;
             enable_raw_mode()?;
             execute!(terminal.backend_mut(), EnterAlternateScreen)?;
+
+            execute!(terminal.backend_mut(), EnableMouseCapture)?;
             terminal.clear()?;
             // terminal is restored, so now it's safe to report the editor's failure
             if let Err(e) = res {
@@ -389,16 +392,22 @@ impl App {
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
                 let pos = Position::new(mouse.column, mouse.row);
-                if !self.list_area.contains(pos) {
+                if !self.table_area.contains(pos) {
                     return None;
                 }
 
-                let idx = (mouse.row - self.list_area.y) as usize + self.list_state.offset();
-                if idx == self.dir_view.get_selected() {
-                    return Some(Message::Open);
-                }
+                let row_in_table = (mouse.row - self.table_area.y).checked_sub(1)?;
+                let idx = row_in_table as usize + self.table_state.offset();
+
                 let len = self.dir_view.displayed().len();
-                (idx < len).then_some(Message::SelectRow(idx))
+                if idx >= len {
+                    return None;
+                }
+                if idx == self.dir_view.get_selected() {
+                    Some(Message::Open)
+                } else {
+                    Some(Message::SelectRow(idx))
+                }
             }
             _ => None,
         }

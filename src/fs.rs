@@ -1,8 +1,16 @@
-use std::{env, io::ErrorKind, os::unix::fs::PermissionsExt, path::PathBuf, str::from_utf8};
+use std::{
+    env,
+    fs::Metadata,
+    io::ErrorKind,
+    os::unix::fs::{MetadataExt, PermissionsExt},
+    path::PathBuf,
+    str::from_utf8,
+    time::SystemTime,
+};
 
 use color_eyre::{Result, eyre::Context};
 use tokio::{
-    fs::{self, File, read_dir},
+    fs::{self, File, metadata, read_dir},
     io::AsyncReadExt,
     task,
 };
@@ -45,6 +53,8 @@ impl Ord for EntryType {
 pub struct FileEntry {
     pub name: String,
     pub path: PathBuf,
+    pub size: Option<u64>,
+    pub modified: Option<SystemTime>,
     pub ent_type: EntryType,
     pub permissions: u32,
 }
@@ -206,11 +216,14 @@ pub async fn get_files(cwd: &PathBuf) -> Result<Vec<FileEntry>> {
         let name = entry.file_name().to_string_lossy().to_string();
         let entry_ft = entry.file_type().await?;
         let path = entry.path();
-        let permissions = if entry_ft.is_symlink() {
-            fs::symlink_metadata(&path).await?.permissions().mode() & 0o777
+        let metadata = if entry_ft.is_symlink() {
+            fs::symlink_metadata(&path).await?
         } else {
-            fs::metadata(&path).await?.permissions().mode() & 0o777
+            fs::metadata(&path).await?
         };
+
+        let permissions = metadata.permissions().mode() & 0o777;
+
         let ent_type = if entry_ft.is_dir() {
             EntryType::Directory
         } else if entry_ft.is_file() {
@@ -230,11 +243,22 @@ pub async fn get_files(cwd: &PathBuf) -> Result<Vec<FileEntry>> {
                 parent: cwd.to_path_buf(),
             }
         };
+        let size = match metadata.len() {
+            0 => None,
+            n => Some(n),
+        };
+        let modified = match metadata.modified() {
+            Ok(m) => Some(m),
+            Err(_) => None,
+        };
+
         let fe = FileEntry {
             name,
             ent_type,
             path,
             permissions,
+            size,
+            modified,
         };
         files.push(fe)
     }
