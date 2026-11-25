@@ -6,7 +6,7 @@ use std::{
 use tokio::fs;
 
 use crate::{
-    error::UiError,
+    error::AppError,
     fs::{EntryType, FileEntry, get_files, part_files},
 };
 
@@ -56,7 +56,7 @@ impl DirView {
         Some(file.ent_type)
     }
 
-    pub async fn open_dir(&mut self) -> Result<(), UiError> {
+    pub async fn open_dir(&mut self) -> Result<(), AppError> {
         let idx = &self.selected;
         let file = self.displayed()[*idx].clone();
         let path = match file.ent_type {
@@ -67,7 +67,7 @@ impl DirView {
         self.selected = 0;
         let new_files = match get_files(&path).await {
             Ok(f) => f,
-            Err(e) => return Err(UiError::from_report(e, &path)),
+            Err(e) => return Err(AppError::from_report(e, &path)),
         };
         self.set_files(new_files);
         self.history.push(self.cwd.clone());
@@ -113,7 +113,7 @@ impl DirView {
         Ok(())
     }
 
-    pub async fn delete(&mut self, remove: bool) -> Result<(), UiError> {
+    pub async fn delete(&mut self, remove: bool) -> Result<(), AppError> {
         let displayed = self.displayed();
         let x = if let Some(f) = displayed.get(self.selected) {
             f
@@ -122,7 +122,7 @@ impl DirView {
         };
         x.delete(remove)
             .await
-            .map_err(|e| UiError::from_report(e, &x.path))?;
+            .map_err(|e| AppError::from_report(e, &x.path))?;
         if displayed.len() == 1 {
             self.selected = 0;
         } else {
@@ -131,7 +131,7 @@ impl DirView {
         match self.refresh().await {
             Ok(_) => {}
             Err(e) => {
-                return Err(UiError::Refresh {
+                return Err(AppError::Refresh {
                     path: self.cwd.clone(),
                     message: format!("{e:#}"),
                 });
@@ -153,7 +153,7 @@ impl DirView {
         tracing::debug!(?self.yanked, "yanked file");
     }
 
-    pub async fn paste(&mut self) -> Result<(), UiError> {
+    pub async fn paste(&mut self) -> Result<(), AppError> {
         let f = match &self.yanked {
             Some(f) => f,
             None => return Ok(()),
@@ -177,7 +177,7 @@ impl DirView {
                 }
                 match fs::copy(&f.path, candidate).await {
                     Ok(_) => {}
-                    Err(e) => return Err(UiError::from_io(e, &f.path)),
+                    Err(e) => return Err(AppError::from_io(e, &f.path)),
                 };
             }
             EntryType::Directory => {
@@ -205,7 +205,7 @@ impl DirView {
         match self.refresh().await {
             Ok(_) => {}
             Err(e) => {
-                return Err(UiError::Refresh {
+                return Err(AppError::Refresh {
                     path: self.cwd.clone(),
                     message: format!("{e:#}"),
                 });
@@ -214,26 +214,26 @@ impl DirView {
         Ok(())
     }
 
-    async fn paste_dir(&self, src: &Path, dest: &Path) -> Result<(), UiError> {
+    async fn paste_dir(&self, src: &Path, dest: &Path) -> Result<(), AppError> {
         match fs::create_dir(dest).await {
             Ok(_) => {}
-            Err(e) => return Err(UiError::from_io(e, &dest)),
+            Err(e) => return Err(AppError::from_io(e, &dest)),
         };
 
         let mut entries = match fs::read_dir(src).await {
             Ok(r) => r,
-            Err(e) => return Err(UiError::from_io(e, &src)),
+            Err(e) => return Err(AppError::from_io(e, &src)),
         };
 
         while let Some(entry) = match entries.next_entry().await {
             Ok(e) => e,
-            Err(e) => return Err(UiError::from_io(e, &src)),
+            Err(e) => return Err(AppError::from_io(e, &src)),
         } {
             let src_path = entry.path();
             let dest_path = dest.join(entry.file_name());
             let ft = match entry.file_type().await {
                 Ok(ft) => ft,
-                Err(e) => return Err(UiError::from_io(e, &entry.path())),
+                Err(e) => return Err(AppError::from_io(e, &entry.path())),
             };
 
             if ft.is_dir() {
@@ -241,7 +241,7 @@ impl DirView {
             } else {
                 match fs::copy(&src_path, &dest_path).await {
                     Ok(_) => {}
-                    Err(e) => return Err(UiError::from_io(e, &src_path)),
+                    Err(e) => return Err(AppError::from_io(e, &src_path)),
                 };
             }
         }
@@ -281,7 +281,7 @@ impl DirView {
         }
     }
 
-    pub async fn add(&mut self, text: String) -> Result<(), UiError> {
+    pub async fn add(&mut self, text: String) -> Result<(), AppError> {
         let text = text.trim();
         let ends_in_slash = text.ends_with('/');
         let parts: Vec<&str> = text.split('/').filter(|s| !s.is_empty()).collect();
@@ -297,7 +297,7 @@ impl DirView {
             if parts.len() - 1 == i && !ends_in_slash {
                 match fs::File::create_new(&current).await {
                     Ok(_) => {}
-                    Err(e) => return Err(UiError::from_io(e, &current)),
+                    Err(e) => return Err(AppError::from_io(e, &current)),
                 };
             } else {
                 match fs::create_dir(&current).await {
@@ -305,19 +305,19 @@ impl DirView {
                     Err(e) if e.kind() == ErrorKind::AlreadyExists && !is_last => {
                         let meta = fs::metadata(&current)
                             .await
-                            .map_err(|e| UiError::from_io(e, &current))?;
+                            .map_err(|e| AppError::from_io(e, &current))?;
                         if !meta.is_dir() {
-                            return Err(UiError::AlreadyExists(current));
+                            return Err(AppError::AlreadyExists(current));
                         }
                     }
-                    Err(e) => return Err(UiError::from_io(e, &current)),
+                    Err(e) => return Err(AppError::from_io(e, &current)),
                 }
             }
         }
         match self.refresh().await {
             Ok(_) => {}
             Err(e) => {
-                return Err(UiError::Refresh {
+                return Err(AppError::Refresh {
                     path: self.cwd.clone(),
                     message: format!("{e:#}"),
                 });

@@ -4,7 +4,7 @@ use std::{
 };
 
 #[derive(Debug, thiserror::Error)]
-pub enum UiError {
+pub enum AppError {
     #[error("{0} already exists")]
     AlreadyExists(PathBuf),
     #[error("permission denied: {0}")]
@@ -22,7 +22,7 @@ pub enum UiError {
     Other { path: PathBuf, description: String },
 }
 
-impl UiError {
+impl AppError {
     pub fn from_io(e: std::io::Error, path: &Path) -> Self {
         match e.kind() {
             ErrorKind::AlreadyExists => Self::AlreadyExists(path.to_owned()),

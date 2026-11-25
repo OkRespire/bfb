@@ -11,7 +11,7 @@ const MIN: u64 = 60;
 const HOUR: u64 = 60 * MIN;
 const DAY: u64 = 24 * HOUR;
 
-use crate::{App, app::Mode, fs::FileEntry};
+use crate::{App, app::Mode, error::AppError, fs::FileEntry};
 impl App {
     /// Renders the user interface.
     ///
@@ -113,15 +113,18 @@ impl App {
 
     fn bot_right_mode(&self) -> Paragraph<'_> {
         match self.mode {
-            Mode::Browsing | Mode::Rename { .. } | Mode::Delete { .. } | Mode::Add { .. } => {
-                Paragraph::new("NORMAL")
-            }
+            Mode::Browsing
+            | Mode::ContextMenu
+            | Mode::Rename { .. }
+            | Mode::Delete { .. }
+            | Mode::Add { .. } => Paragraph::new("NORMAL"),
             Mode::Visual => Paragraph::new("VISUAL"),
         }
     }
     fn mode_hint(&self, cf: Option<&FileEntry>) -> String {
         match &self.error {
             Some(e) => return e.to_string(),
+
             None => {}
         }
         let curr_file = match cf {
@@ -150,6 +153,7 @@ impl App {
                 format!("Creating: {}", input.text)
             }
             Mode::Visual => String::new(),
+            Mode::ContextMenu => todo!(),
         }
     }
 }

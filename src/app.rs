@@ -1,5 +1,5 @@
 use futures::{FutureExt, StreamExt};
-use std::{env, io::stdout, process::Stdio};
+use std::{env, process::Stdio};
 
 use color_eyre::Result;
 use crossterm::{
@@ -19,9 +19,16 @@ use ratatui::{
 use crate::{
     config::Config,
     dirview::DirView,
-    error::UiError,
+    error::AppError,
     fs::{EntryType, FileEntry},
 };
+
+enum CursorBounds {
+    Row(usize),
+    OutOfBounds,
+    HeaderClick,
+    Empty,
+}
 
 #[derive(Debug, Default)]
 pub enum Mode {
@@ -37,6 +44,7 @@ pub enum Mode {
         input: Input,
     },
     Visual,
+    ContextMenu(CursorBounds),
 }
 
 #[derive(Debug, Default)]
@@ -85,6 +93,7 @@ pub enum Message {
     Yank,
     Paste,
     SelectRow(usize),
+    ContextMenu(CursorBounds),
 }
 
 pub enum Command {
@@ -105,7 +114,7 @@ pub struct App {
     // Event stream.
     pub event_stream: EventStream,
     pub dir_view: DirView,
-    pub error: Option<UiError>,
+    pub error: Option<AppError>,
     pub config: Config,
     pub mode: Mode,
     pub table_state: TableState,
@@ -153,7 +162,7 @@ impl App {
             terminal.clear()?;
             // terminal is restored, so now it's safe to report the editor's failure
             if let Err(e) = res {
-                self.error = Some(UiError::from_report(e, &f.path));
+                self.error = Some(AppError::from_report(e, &f.path));
             }
         } else if let Err(e) = tokio::process::Command::new("xdg-open")
             .arg(&f.path)
@@ -161,7 +170,7 @@ impl App {
             .stderr(Stdio::null())
             .spawn()
         {
-            self.error = Some(UiError::from_io(e, &f.path));
+            self.error = Some(AppError::from_io(e, &f.path));
         }
         Ok(())
     }
@@ -282,6 +291,15 @@ impl App {
                 Message::SelectRow(i) => {
                     self.dir_view.select(i);
                 }
+                Message::ContextMenu(cb) => {
+                    match cb {
+                        CursorBounds::Row(idx) => {
+                            self.dir_view.select(idx);
+                        }
+                        _ => {}
+                    }
+                    self.mode = Mode::ContextMenu(cb);
+                }
             }
         }
         Command::None
@@ -304,7 +322,10 @@ impl App {
                 (_, KeyCode::Char('d')) => Some(Message::RequestDelete { permanent: false }),
                 (_, KeyCode::Char('D')) => Some(Message::RequestDelete { permanent: true }),
                 (_, KeyCode::Char('r')) => {
-                    let curr_file = self.dir_view.get_curr_file().unwrap();
+                    let curr_file = match self.dir_view.get_curr_file() {
+                        Some(f) => f,
+                        None => return None,
+                    };
                     Some(Message::RequestRename {
                         curr_file: curr_file.clone(),
                     })
@@ -385,30 +406,60 @@ impl App {
                 KeyCode::Esc => Some(Message::CancelConfirm),
                 _ => None,
             },
+            Mode::ContextMenu(cb) => match cb {
+                CursorBounds::Row(_) => match (key.modifiers, key.code) {
+                    (_, KeyCode::Enter | KeyCode::Char('l') | KeyCode::Right) => {
+                        Some(Message::Open)
+                    }
+                    (_, KeyCode::Backspace | KeyCode::Char('h') | KeyCode::Left) => {
+                        Some(Message::GoParent)
+                    }
+                    (_, KeyCode::Char('d')) => Some(Message::RequestDelete { permanent: false }),
+                    (_, KeyCode::Char('D')) => Some(Message::RequestDelete { permanent: true }),
+                    (_, KeyCode::Char('r')) => {
+                        let curr_file = match self.dir_view.get_curr_file() {
+                            Some(f) => f,
+                            None => return None,
+                        };
+
+                        Some(Message::RequestRename {
+                            curr_file: curr_file.clone(),
+                        })
+                    }
+                    (_, KeyCode::Char('.')) => Some(Message::ToggleHidden),
+                    (_, KeyCode::Char('a')) => Some(Message::RequestAdd),
+                    (_, KeyCode::Char('v')) => Some(Message::ToggleVisual),
+                    (_, KeyCode::Char('y')) => Some(Message::Yank),
+                    (_, KeyCode::Char('p')) => Some(Message::Paste),
+                    _ => None,
+                },
+                CursorBounds::OutOfBounds => todo!(),
+                CursorBounds::HeaderClick => todo!(),
+                CursorBounds::Empty => todo!(),
+            },
         }
     }
 
     pub fn on_mouse_event(&self, mouse: MouseEvent) -> Option<Message> {
         match mouse.kind {
-            MouseEventKind::Down(MouseButton::Left) => {
-                let pos = Position::new(mouse.column, mouse.row);
-                if !self.table_area.contains(pos) {
-                    return None;
+            MouseEventKind::Down(MouseButton::Left) => match self.cursor_loc(mouse) {
+                CursorBounds::Row(idx) => {
+                    if idx == self.dir_view.get_selected() {
+                        return Some(Message::Open);
+                    } else {
+                        return Some(Message::SelectRow(idx));
+                    }
                 }
+                CursorBounds::OutOfBounds => return None,
+                CursorBounds::HeaderClick => return None,
+                CursorBounds::Empty => return None,
+            },
 
-                let row_in_table = (mouse.row - self.table_area.y).checked_sub(1)?;
-                let idx = row_in_table as usize + self.table_state.offset();
-
-                let len = self.dir_view.displayed().len();
-                if idx >= len {
-                    return None;
-                }
-                if idx == self.dir_view.get_selected() {
-                    Some(Message::Open)
-                } else {
-                    Some(Message::SelectRow(idx))
-                }
+            MouseEventKind::Down(MouseButton::Right) => {
+                let cb = self.cursor_loc(mouse);
+                Some(Message::ContextMenu(cb))
             }
+
             _ => None,
         }
     }
@@ -438,6 +489,27 @@ impl App {
             _ => {}
         }
         Ok(())
+    }
+
+    fn cursor_loc(&self, mouse: MouseEvent) -> CursorBounds {
+        let pos = Position::new(mouse.column, mouse.row);
+        if !self.table_area.contains(pos) {
+            return CursorBounds::OutOfBounds;
+        }
+
+        let row_in_table = match (mouse.row - self.table_area.y).checked_sub(1) {
+            Some(e) => e,
+            None => return CursorBounds::HeaderClick,
+        };
+        let idx = row_in_table as usize + self.table_state.offset();
+
+        let len = self.dir_view.displayed().len();
+
+        if idx >= len {
+            return CursorBounds::Empty;
+        }
+
+        CursorBounds::Row(idx)
     }
 
     /// Set running to false to quit the application.
