@@ -32,7 +32,7 @@ pub enum HitTarget {
 }
 
 #[derive(Debug)]
-pub struct ContextMenu {
+pub struct MouseTarget {
     pub target: HitTarget,
     pub pos: Position,
 }
@@ -51,7 +51,7 @@ pub enum Mode {
         input: Input,
     },
     Visual,
-    ContextMenu(ContextMenu),
+    ContextMenu(MouseTarget),
 }
 
 #[derive(Debug, Default)]
@@ -100,7 +100,8 @@ pub enum Message {
     Yank,
     Paste,
     SelectRow(usize),
-    ContextMenu(ContextMenu),
+    ContextMenu(MouseTarget),
+    ChangeHover(HitTarget),
 }
 
 pub enum Command {
@@ -314,6 +315,10 @@ impl App {
                     }
                     self.mode = Mode::ContextMenu(cm);
                 }
+                Message::ChangeHover(ht) => match ht {
+                    HitTarget::Row(idx) => self.dir_view.hovered = Some(idx),
+                    _ => self.dir_view.hovered = None,
+                },
             }
         }
         Command::None
@@ -470,6 +475,10 @@ impl App {
                     HitTarget::HeaderClick => return Some(Message::DefaultMode),
                     HitTarget::Empty => return Some(Message::DefaultMode),
                 },
+                MouseEventKind::Moved => {
+                    let ht = self.cursor_loc(mouse).target;
+                    return Some(Message::ChangeHover(ht));
+                }
 
                 MouseEventKind::Down(MouseButton::Right) => {
                     let ht = self.cursor_loc(mouse);
@@ -521,10 +530,10 @@ impl App {
         Ok(())
     }
 
-    fn cursor_loc(&self, mouse: MouseEvent) -> ContextMenu {
+    fn cursor_loc(&self, mouse: MouseEvent) -> MouseTarget {
         let pos = Position::new(mouse.column, mouse.row);
         if !self.table_area.contains(pos) {
-            return ContextMenu {
+            return MouseTarget {
                 target: HitTarget::OutOfBounds,
                 pos,
             };
@@ -533,7 +542,7 @@ impl App {
         let row_in_table = match (mouse.row - self.table_area.y).checked_sub(1) {
             Some(e) => e,
             None => {
-                return ContextMenu {
+                return MouseTarget {
                     target: HitTarget::HeaderClick,
                     pos,
                 };
@@ -544,13 +553,13 @@ impl App {
         let len = self.dir_view.displayed().len();
 
         if idx >= len {
-            return ContextMenu {
+            return MouseTarget {
                 target: HitTarget::Empty,
                 pos,
             };
         }
 
-        ContextMenu {
+        MouseTarget {
             target: HitTarget::Row(idx),
             pos,
         }

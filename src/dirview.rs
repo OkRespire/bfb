@@ -18,6 +18,7 @@ pub struct DirView {
     pub hidden: Vec<FileEntry>,
     pub is_hidden: bool,
     pub selected: usize,
+    pub hovered: Option<usize>,
     pub yanked: Option<FileEntry>,
 }
 impl DirView {
@@ -30,6 +31,7 @@ impl DirView {
             hidden,
             is_hidden: false,
             selected: 0,
+            hovered: None,
             cwd,
             yanked: None,
         })

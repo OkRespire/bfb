@@ -41,12 +41,19 @@ impl App {
         let title = Paragraph::new(self.dir_view.cwd.to_string_lossy());
         let rows: Vec<Row> = displayed
             .iter()
-            .map(|e| {
-                Row::new([
-                    Cell::from(e.to_string()),    // icon + name (your Display)
-                    Cell::from(fmt_size(e.size)), // "-" when None
+            .enumerate()
+            .map(|(i, e)| {
+                let row = Row::new([
+                    Cell::from(e.to_string()),
+                    Cell::from(fmt_size(e.size)),
                     Cell::from(fmt_time(e.modified, SystemTime::now())),
-                ])
+                ]);
+
+                if self.dir_view.hovered == Some(i) {
+                    row.style(Style::new().bg(Color::Gray).fg(Color::Black))
+                } else {
+                    row.style(Style::new().bg(Color::Reset).fg(Color::White))
+                }
             })
             .collect();
 
