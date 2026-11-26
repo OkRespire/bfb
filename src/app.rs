@@ -23,11 +23,18 @@ use crate::{
     fs::{EntryType, FileEntry},
 };
 
-enum CursorBounds {
+#[derive(Debug)]
+pub enum HitTarget {
     Row(usize),
     OutOfBounds,
     HeaderClick,
     Empty,
+}
+
+#[derive(Debug)]
+pub struct ContextMenu {
+    pub target: HitTarget,
+    pub pos: Position,
 }
 
 #[derive(Debug, Default)]
@@ -44,7 +51,7 @@ pub enum Mode {
         input: Input,
     },
     Visual,
-    ContextMenu(CursorBounds),
+    ContextMenu(ContextMenu),
 }
 
 #[derive(Debug, Default)]
@@ -82,7 +89,7 @@ pub enum Message {
     GoParent,
     ToggleHidden,
     Quit,
-    CancelConfirm,
+    DefaultMode,
     RequestDelete { permanent: bool },
     ConfirmDelete,
     RequestRename { curr_file: FileEntry },
@@ -93,7 +100,7 @@ pub enum Message {
     Yank,
     Paste,
     SelectRow(usize),
-    ContextMenu(CursorBounds),
+    ContextMenu(ContextMenu),
 }
 
 pub enum Command {
@@ -240,9 +247,16 @@ impl App {
                 Message::MoveDown => {
                     self.dir_view.move_down();
                 }
-                Message::Open => return Command::OpenSelected,
+                Message::Open => {
+                    self.mode = Mode::Browsing;
 
-                Message::GoParent => return Command::GoParent,
+                    return Command::OpenSelected;
+                }
+
+                Message::GoParent => {
+                    self.mode = Mode::Browsing;
+                    return Command::GoParent;
+                }
                 Message::ToggleHidden => {
                     self.dir_view.is_hidden = !self.dir_view.is_hidden;
                 }
@@ -258,7 +272,7 @@ impl App {
                     return Command::Delete { permanent };
                 }
                 Message::RequestDelete { permanent } => self.mode = Mode::Delete { permanent },
-                Message::CancelConfirm => self.mode = Mode::Browsing,
+                Message::DefaultMode => self.mode = Mode::Browsing,
                 Message::RequestRename { curr_file } => {
                     let input = Input {
                         text: curr_file.name.clone(),
@@ -291,14 +305,14 @@ impl App {
                 Message::SelectRow(i) => {
                     self.dir_view.select(i);
                 }
-                Message::ContextMenu(cb) => {
-                    match cb {
-                        CursorBounds::Row(idx) => {
+                Message::ContextMenu(cm) => {
+                    match cm.target {
+                        HitTarget::Row(idx) => {
                             self.dir_view.select(idx);
                         }
                         _ => {}
                     }
-                    self.mode = Mode::ContextMenu(cb);
+                    self.mode = Mode::ContextMenu(cm);
                 }
             }
         }
@@ -340,7 +354,7 @@ impl App {
             },
             Mode::Delete { .. } => match (key.modifiers, key.code) {
                 (_, KeyCode::Char('y')) => Some(Message::ConfirmDelete),
-                (_, KeyCode::Char('n') | KeyCode::Esc) => Some(Message::CancelConfirm),
+                (_, KeyCode::Char('n') | KeyCode::Esc) => Some(Message::DefaultMode),
                 _ => None,
             },
             Mode::Rename { input } => match key.code {
@@ -370,11 +384,11 @@ impl App {
                     // confirm-pattern as delete: Action::ConfirmRename
                     Some(Message::Rename)
                 }
-                KeyCode::Esc => Some(Message::CancelConfirm),
+                KeyCode::Esc => Some(Message::DefaultMode),
                 _ => None,
             },
             Mode::Visual => match key.code {
-                KeyCode::Esc => Some(Message::CancelConfirm),
+                KeyCode::Esc => Some(Message::DefaultMode),
                 _ => None,
             },
             Mode::Add { input } => match key.code {
@@ -403,11 +417,12 @@ impl App {
                     // confirm-pattern as delete: Action::ConfirmRename
                     Some(Message::Add)
                 }
-                KeyCode::Esc => Some(Message::CancelConfirm),
+                KeyCode::Esc => Some(Message::DefaultMode),
                 _ => None,
             },
-            Mode::ContextMenu(cb) => match cb {
-                CursorBounds::Row(_) => match (key.modifiers, key.code) {
+            Mode::ContextMenu(cb) => match cb.target {
+                HitTarget::Row(_) => match (key.modifiers, key.code) {
+                    (_, KeyCode::Esc) => Some(Message::DefaultMode),
                     (_, KeyCode::Enter | KeyCode::Char('l') | KeyCode::Right) => {
                         Some(Message::Open)
                     }
@@ -433,34 +448,49 @@ impl App {
                     (_, KeyCode::Char('p')) => Some(Message::Paste),
                     _ => None,
                 },
-                CursorBounds::OutOfBounds => todo!(),
-                CursorBounds::HeaderClick => todo!(),
-                CursorBounds::Empty => todo!(),
+                HitTarget::OutOfBounds => todo!(),
+                HitTarget::HeaderClick => todo!(),
+                HitTarget::Empty => todo!(),
             },
         }
     }
 
     pub fn on_mouse_event(&self, mouse: MouseEvent) -> Option<Message> {
-        match mouse.kind {
-            MouseEventKind::Down(MouseButton::Left) => match self.cursor_loc(mouse) {
-                CursorBounds::Row(idx) => {
-                    if idx == self.dir_view.get_selected() {
-                        return Some(Message::Open);
-                    } else {
-                        return Some(Message::SelectRow(idx));
+        match self.mode {
+            Mode::Browsing => match mouse.kind {
+                MouseEventKind::Down(MouseButton::Left) => match self.cursor_loc(mouse).target {
+                    HitTarget::Row(idx) => {
+                        if idx == self.dir_view.get_selected() {
+                            return Some(Message::Open);
+                        } else {
+                            return Some(Message::SelectRow(idx));
+                        }
                     }
+                    HitTarget::OutOfBounds => return Some(Message::DefaultMode),
+                    HitTarget::HeaderClick => return Some(Message::DefaultMode),
+                    HitTarget::Empty => return Some(Message::DefaultMode),
+                },
+
+                MouseEventKind::Down(MouseButton::Right) => {
+                    let ht = self.cursor_loc(mouse);
+                    return Some(Message::ContextMenu(ht));
                 }
-                CursorBounds::OutOfBounds => return None,
-                CursorBounds::HeaderClick => return None,
-                CursorBounds::Empty => return None,
+                MouseEventKind::ScrollUp => return Some(Message::MoveUp),
+                MouseEventKind::ScrollDown => return Some(Message::MoveDown),
+                _ => return None,
             },
+            Mode::ContextMenu(_) => match mouse.kind {
+                MouseEventKind::Down(MouseButton::Left) => return Some(Message::DefaultMode),
 
-            MouseEventKind::Down(MouseButton::Right) => {
-                let cb = self.cursor_loc(mouse);
-                Some(Message::ContextMenu(cb))
-            }
-
-            _ => None,
+                MouseEventKind::Down(MouseButton::Right) => {
+                    let ht = self.cursor_loc(mouse);
+                    return Some(Message::ContextMenu(ht));
+                }
+                MouseEventKind::ScrollUp => return Some(Message::MoveUp),
+                MouseEventKind::ScrollDown => return Some(Message::MoveDown),
+                _ => return None,
+            },
+            _ => return None,
         }
     }
 
@@ -491,25 +521,39 @@ impl App {
         Ok(())
     }
 
-    fn cursor_loc(&self, mouse: MouseEvent) -> CursorBounds {
+    fn cursor_loc(&self, mouse: MouseEvent) -> ContextMenu {
         let pos = Position::new(mouse.column, mouse.row);
         if !self.table_area.contains(pos) {
-            return CursorBounds::OutOfBounds;
+            return ContextMenu {
+                target: HitTarget::OutOfBounds,
+                pos,
+            };
         }
 
         let row_in_table = match (mouse.row - self.table_area.y).checked_sub(1) {
             Some(e) => e,
-            None => return CursorBounds::HeaderClick,
+            None => {
+                return ContextMenu {
+                    target: HitTarget::HeaderClick,
+                    pos,
+                };
+            }
         };
         let idx = row_in_table as usize + self.table_state.offset();
 
         let len = self.dir_view.displayed().len();
 
         if idx >= len {
-            return CursorBounds::Empty;
+            return ContextMenu {
+                target: HitTarget::Empty,
+                pos,
+            };
         }
 
-        CursorBounds::Row(idx)
+        ContextMenu {
+            target: HitTarget::Row(idx),
+            pos,
+        }
     }
 
     /// Set running to false to quit the application.

@@ -2,16 +2,16 @@ use std::{rc::Rc, time::SystemTime};
 
 use ratatui::{
     Frame,
-    layout::{Alignment, Constraint, Layout, Rect},
-    style::{Color, Style},
-    widgets::{Cell, Paragraph, Row, Table},
+    layout::{Alignment, Constraint, Layout, Position, Rect},
+    style::{Color, Style, Stylize},
+    widgets::{Block, Cell, Clear, List, ListItem, Paragraph, Row, Table},
 };
 
 const MIN: u64 = 60;
 const HOUR: u64 = 60 * MIN;
 const DAY: u64 = 24 * HOUR;
 
-use crate::{App, app::Mode, error::AppError, fs::FileEntry};
+use crate::{App, app::Mode, fs::FileEntry};
 impl App {
     /// Renders the user interface.
     ///
@@ -64,14 +64,31 @@ impl App {
         } else {
             let table = Table::new(rows, widths)
                 .header(Row::new(["Name", "Size", "Modified"]).style(Style::new().bold()))
-                .highlight_symbol("> ");
+                .highlight_symbol("> ")
+                .row_highlight_style(Style::new().bg(Color::LightBlue).fg(Color::White).bold());
             self.table_state.select(Some(self.dir_view.get_selected()));
 
             frame.render_stateful_widget(table, main_area, &mut self.table_state);
         }
 
         frame.render_widget(title, top);
-        self.make_status_bar(status_chunks, frame)
+        self.make_status_bar(status_chunks, frame);
+        if let Mode::ContextMenu(cm) = &self.mode {
+            let area = Self::context_menu_area(cm.pos, frame.area(), 20, 8);
+            frame.render_widget(Clear, area);
+            self.make_context_menu(area, frame);
+        }
+    }
+
+    fn make_context_menu(&self, area: Rect, frame: &mut Frame<'_>) {
+        let items = vec![
+            ListItem::new("Open"),
+            ListItem::new("Rename"),
+            ListItem::new("Delete"),
+        ];
+
+        let list = List::new(items).block(Block::bordered()).bg(Color::Black);
+        frame.render_widget(list, area);
     }
 
     fn make_status_bar(&self, area: Rc<[Rect]>, frame: &mut Frame<'_>) {
@@ -111,10 +128,17 @@ impl App {
         }
     }
 
+    fn context_menu_area(pos: Position, term: Rect, w: u16, h: u16) -> Rect {
+        let x = pos.x.min(term.width.saturating_sub(w));
+        let y = pos.y.min(term.height.saturating_sub(h));
+
+        Rect::new(x, y, w, h)
+    }
+
     fn bot_right_mode(&self) -> Paragraph<'_> {
         match self.mode {
             Mode::Browsing
-            | Mode::ContextMenu
+            | Mode::ContextMenu(_)
             | Mode::Rename { .. }
             | Mode::Delete { .. }
             | Mode::Add { .. } => Paragraph::new("NORMAL"),
@@ -137,7 +161,7 @@ impl App {
             },
         };
         match &self.mode {
-            Mode::Browsing => String::new(),
+            Mode::Browsing | Mode::ContextMenu(_) => String::new(),
             Mode::Delete { permanent } => {
                 let first_part = if *permanent {
                     "PERMANENTLY".to_string()
@@ -153,7 +177,6 @@ impl App {
                 format!("Creating: {}", input.text)
             }
             Mode::Visual => String::new(),
-            Mode::ContextMenu => todo!(),
         }
     }
 }
