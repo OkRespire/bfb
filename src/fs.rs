@@ -100,6 +100,16 @@ impl PartialOrd for FileEntry {
 }
 
 impl FileEntry {
+    pub fn bogus() -> Self {
+        Self {
+            name: "blank".to_string(),
+            path: env::home_dir().unwrap(),
+            size: None,
+            modified: None,
+            ent_type: EntryType::File,
+            permissions: 0u32,
+        }
+    }
     pub async fn edit_file(&self) -> Result<()> {
         let editor = env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
         tokio::process::Command::new(editor)

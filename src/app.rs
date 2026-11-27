@@ -13,7 +13,7 @@ use crossterm::{
 use ratatui::{
     DefaultTerminal,
     layout::{Position, Rect},
-    widgets::TableState,
+    widgets::{ListState, TableState},
 };
 
 use crate::{
@@ -31,10 +31,142 @@ pub enum HitTarget {
     Empty,
 }
 
+#[derive(Debug, Default)]
+pub struct ContextMenuOptions {
+    pub open: bool,
+    pub rename: bool,
+    pub delete: bool,
+    pub p_delete: bool,
+    pub copy: bool,
+    pub paste: bool,
+    pub add: bool,
+}
+#[derive(Debug, Clone)]
+pub enum ContextAction {
+    Open,
+    Rename,
+    Delete,
+    PermaDelete,
+    Copy,
+    Paste,
+    Add,
+}
+
+impl ContextMenuOptions {
+    pub fn visible_options(&self) -> Vec<(ContextAction, &'static str)> {
+        let mut options = Vec::new();
+
+        if self.open {
+            options.push((ContextAction::Open, "Open"));
+        }
+        if self.rename {
+            options.push((ContextAction::Rename, "Rename"));
+        }
+        if self.delete {
+            options.push((ContextAction::Delete, "Move to Trash"));
+        }
+        if self.p_delete {
+            options.push((ContextAction::PermaDelete, "Delete"));
+        }
+        if self.copy {
+            options.push((ContextAction::Copy, "Copy"));
+        }
+        if self.paste {
+            options.push((ContextAction::Paste, "Paste"));
+        }
+        if self.add {
+            options.push((ContextAction::Add, "New File"));
+        }
+
+        options
+    }
+
+    fn len(&self) -> usize {
+        self.visible_options().len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.visible_options().is_empty()
+    }
+}
+
 #[derive(Debug)]
 pub struct MouseTarget {
     pub target: HitTarget,
     pub pos: Position,
+}
+
+#[derive(Debug)]
+pub struct ContextMenuView {
+    pub mt: MouseTarget,
+    pub selected: usize,
+    pub hover: Option<usize>,
+    pub options: ContextMenuOptions,
+    pub list_state: ListState,
+    pub list_area: Rect,
+}
+
+impl ContextMenuView {
+    pub fn new(mt: MouseTarget, yanked: Option<FileEntry>) -> Self {
+        let paste = yanked.is_some();
+        let options = match mt.target {
+            HitTarget::Row(_) => ContextMenuOptions {
+                open: true,
+                rename: true,
+                delete: true,
+                p_delete: true,
+                copy: true,
+                add: true,
+                paste,
+                ..Default::default()
+            },
+            HitTarget::Empty => ContextMenuOptions {
+                paste,
+                add: true,
+                ..Default::default()
+            },
+            HitTarget::HeaderClick | HitTarget::OutOfBounds => ContextMenuOptions::default(),
+        };
+
+        Self {
+            mt,
+            selected: 0,
+            hover: None,
+            options,
+            list_state: ListState::default(),
+            list_area: Rect::default(),
+        }
+    }
+    pub fn move_up(&mut self) {
+        self.selected = self.selected.saturating_sub(1);
+
+        tracing::debug!(?self.selected, "selected");
+    }
+
+    pub fn move_down(&mut self) {
+        if self.options.is_empty() {
+            return;
+        }
+        self.selected = (self.selected + 1).min(self.options.len() - 1);
+
+        tracing::debug!(?self.selected, "selected");
+    }
+    pub fn selected_action(&self, curr_file: Option<FileEntry>) -> Option<Message> {
+        self.options
+            .visible_options()
+            .get(self.selected)
+            .map(|(action, _)| match action {
+                ContextAction::Open => Message::Open,
+                ContextAction::Rename => curr_file
+                    .map(|file| Message::RequestRename { curr_file: file })
+                    .unwrap(),
+                ContextAction::Delete => Message::RequestDelete { permanent: false },
+                ContextAction::PermaDelete => Message::RequestDelete { permanent: true },
+                ContextAction::Copy => Message::Yank,
+                ContextAction::Paste => Message::Paste,
+                ContextAction::Add => Message::RequestAdd,
+            })
+    }
 }
 
 #[derive(Debug, Default)]
@@ -51,7 +183,7 @@ pub enum Mode {
         input: Input,
     },
     Visual,
-    ContextMenu(MouseTarget),
+    ContextMenu(ContextMenuView),
 }
 
 #[derive(Debug, Default)]
@@ -243,10 +375,18 @@ impl App {
         if let Some(a) = action {
             match a {
                 Message::MoveUp => {
-                    self.dir_view.move_up();
+                    if let Mode::ContextMenu(cmv) = &mut self.mode {
+                        cmv.move_up();
+                    } else {
+                        self.dir_view.move_up();
+                    }
                 }
                 Message::MoveDown => {
-                    self.dir_view.move_down();
+                    if let Mode::ContextMenu(cmv) = &mut self.mode {
+                        cmv.move_down();
+                    } else {
+                        self.dir_view.move_down();
+                    }
                 }
                 Message::Open => {
                     self.mode = Mode::Browsing;
@@ -301,23 +441,46 @@ impl App {
                         input: Input::default(),
                     }
                 }
-                Message::Yank => return Command::Yank,
-                Message::Paste => return Command::Paste,
-                Message::SelectRow(i) => {
-                    self.dir_view.select(i);
+                Message::Yank => {
+                    self.mode = Mode::Browsing;
+                    return Command::Yank;
                 }
-                Message::ContextMenu(cm) => {
-                    match cm.target {
+                Message::Paste => {
+                    self.mode = Mode::Browsing;
+                    return Command::Paste;
+                }
+                Message::SelectRow(i) => {
+                    if let Mode::ContextMenu(cmv) = &mut self.mode {
+                        cmv.selected = i
+                    } else {
+                        self.dir_view.select(i);
+                    }
+                }
+                Message::ContextMenu(mt) => {
+                    match mt.target {
                         HitTarget::Row(idx) => {
                             self.dir_view.select(idx);
                         }
                         _ => {}
                     }
-                    self.mode = Mode::ContextMenu(cm);
+                    let cmv = ContextMenuView::new(mt, self.dir_view.yanked.clone());
+                    self.mode = Mode::ContextMenu(cmv);
                 }
                 Message::ChangeHover(ht) => match ht {
-                    HitTarget::Row(idx) => self.dir_view.hovered = Some(idx),
-                    _ => self.dir_view.hovered = None,
+                    HitTarget::Row(idx) => {
+                        if let Mode::ContextMenu(cmv) = &mut self.mode {
+                            cmv.hover = Some(idx);
+                        } else {
+                            self.dir_view.hovered = Some(idx);
+                        }
+                    }
+                    _ => {
+                        if let Mode::ContextMenu(cmv) = &mut self.mode {
+                            cmv.hover = None;
+                        } else {
+                            self.dir_view.hovered = None;
+                        }
+                    }
                 },
             }
         }
@@ -425,32 +588,18 @@ impl App {
                 KeyCode::Esc => Some(Message::DefaultMode),
                 _ => None,
             },
-            Mode::ContextMenu(cb) => match cb.target {
+            Mode::ContextMenu(cmv) => match cmv.mt.target {
                 HitTarget::Row(_) => match (key.modifiers, key.code) {
+                    (_, KeyCode::Up | KeyCode::Char('k')) => Some(Message::MoveUp),
+                    (_, KeyCode::Down | KeyCode::Char('j')) => Some(Message::MoveDown),
                     (_, KeyCode::Esc) => Some(Message::DefaultMode),
                     (_, KeyCode::Enter | KeyCode::Char('l') | KeyCode::Right) => {
-                        Some(Message::Open)
+                        let curr_file = self.dir_view.get_curr_file();
+                        cmv.selected_action(curr_file.cloned())
                     }
                     (_, KeyCode::Backspace | KeyCode::Char('h') | KeyCode::Left) => {
-                        Some(Message::GoParent)
+                        Some(Message::DefaultMode)
                     }
-                    (_, KeyCode::Char('d')) => Some(Message::RequestDelete { permanent: false }),
-                    (_, KeyCode::Char('D')) => Some(Message::RequestDelete { permanent: true }),
-                    (_, KeyCode::Char('r')) => {
-                        let curr_file = match self.dir_view.get_curr_file() {
-                            Some(f) => f,
-                            None => return None,
-                        };
-
-                        Some(Message::RequestRename {
-                            curr_file: curr_file.clone(),
-                        })
-                    }
-                    (_, KeyCode::Char('.')) => Some(Message::ToggleHidden),
-                    (_, KeyCode::Char('a')) => Some(Message::RequestAdd),
-                    (_, KeyCode::Char('v')) => Some(Message::ToggleVisual),
-                    (_, KeyCode::Char('y')) => Some(Message::Yank),
-                    (_, KeyCode::Char('p')) => Some(Message::Paste),
                     _ => None,
                 },
                 HitTarget::OutOfBounds => todo!(),
@@ -461,7 +610,7 @@ impl App {
     }
 
     pub fn on_mouse_event(&self, mouse: MouseEvent) -> Option<Message> {
-        match self.mode {
+        match &self.mode {
             Mode::Browsing => match mouse.kind {
                 MouseEventKind::Down(MouseButton::Left) => match self.cursor_loc(mouse).target {
                     HitTarget::Row(idx) => {
@@ -488,12 +637,28 @@ impl App {
                 MouseEventKind::ScrollDown => return Some(Message::MoveDown),
                 _ => return None,
             },
-            Mode::ContextMenu(_) => match mouse.kind {
-                MouseEventKind::Down(MouseButton::Left) => return Some(Message::DefaultMode),
+            Mode::ContextMenu(cmv) => match mouse.kind {
+                MouseEventKind::Down(MouseButton::Left) => match self.cursor_loc(mouse).target {
+                    HitTarget::Row(idx) => {
+                        if idx == cmv.selected {
+                            let curr_file = self.dir_view.get_curr_file();
+                            return cmv.selected_action(curr_file.cloned());
+                        } else {
+                            return Some(Message::SelectRow(idx));
+                        }
+                    }
+                    HitTarget::OutOfBounds => return Some(Message::DefaultMode),
+                    HitTarget::HeaderClick => return Some(Message::DefaultMode),
+                    HitTarget::Empty => return Some(Message::DefaultMode),
+                },
 
                 MouseEventKind::Down(MouseButton::Right) => {
                     let ht = self.cursor_loc(mouse);
                     return Some(Message::ContextMenu(ht));
+                }
+                MouseEventKind::Moved => {
+                    let ht = self.cursor_loc(mouse).target;
+                    return Some(Message::ChangeHover(ht));
                 }
                 MouseEventKind::ScrollUp => return Some(Message::MoveUp),
                 MouseEventKind::ScrollDown => return Some(Message::MoveDown),
@@ -532,6 +697,40 @@ impl App {
 
     fn cursor_loc(&self, mouse: MouseEvent) -> MouseTarget {
         let pos = Position::new(mouse.column, mouse.row);
+
+        if let Mode::ContextMenu(cmv) = &self.mode {
+            if !cmv.list_area.contains(pos) {
+                return MouseTarget {
+                    target: HitTarget::OutOfBounds,
+                    pos,
+                };
+            }
+
+            let row = match (mouse.row - cmv.list_area.y).checked_sub(1) {
+                Some(row) => row,
+                None => {
+                    return MouseTarget {
+                        target: HitTarget::Empty,
+                        pos,
+                    };
+                }
+            };
+
+            let idx = row as usize + cmv.list_state.offset();
+            let len = cmv.options.len();
+
+            if idx >= len || row >= cmv.list_area.height.saturating_sub(1) {
+                return MouseTarget {
+                    target: HitTarget::Empty,
+                    pos,
+                };
+            }
+
+            return MouseTarget {
+                target: HitTarget::Row(idx),
+                pos,
+            };
+        }
         if !self.table_area.contains(pos) {
             return MouseTarget {
                 target: HitTarget::OutOfBounds,

@@ -4,14 +4,18 @@ use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Layout, Position, Rect},
     style::{Color, Style, Stylize},
-    widgets::{Block, Cell, Clear, List, ListItem, Paragraph, Row, Table},
+    widgets::{Block, Cell, Clear, List, ListItem, ListState, Paragraph, Row, Table},
 };
 
 const MIN: u64 = 60;
 const HOUR: u64 = 60 * MIN;
 const DAY: u64 = 24 * HOUR;
 
-use crate::{App, app::Mode, fs::FileEntry};
+use crate::{
+    App,
+    app::{ContextMenuView, Mode},
+    fs::FileEntry,
+};
 impl App {
     /// Renders the user interface.
     ///
@@ -80,22 +84,37 @@ impl App {
 
         frame.render_widget(title, top);
         self.make_status_bar(status_chunks, frame);
-        if let Mode::ContextMenu(cm) = &self.mode {
-            let area = Self::context_menu_area(cm.pos, frame.area(), 20, 8);
+        if let Mode::ContextMenu(cmv) = &mut self.mode {
+            let area = Self::context_menu_area(cmv.mt.pos, frame.area(), 20, 9);
+            cmv.list_area = area;
             frame.render_widget(Clear, area);
-            self.make_context_menu(area, frame);
+            Self::make_context_menu(frame, cmv);
         }
     }
 
-    fn make_context_menu(&self, area: Rect, frame: &mut Frame<'_>) {
-        let items = vec![
-            ListItem::new("Open"),
-            ListItem::new("Rename"),
-            ListItem::new("Delete"),
-        ];
+    fn make_context_menu(frame: &mut Frame<'_>, cmv: &mut ContextMenuView) {
+        let options = cmv.options.visible_options();
 
-        let list = List::new(items).block(Block::bordered()).bg(Color::Black);
-        frame.render_widget(list, area);
+        let items: Vec<ListItem<'_>> = options
+            .iter()
+            .enumerate()
+            .map(|(i, s)| {
+                let item = ListItem::new(s.1);
+
+                if cmv.hover == Some(i) {
+                    item.style(Style::new().bg(Color::Gray).fg(Color::Black))
+                } else {
+                    item.style(Style::new().bg(Color::Reset).fg(Color::White))
+                }
+            })
+            .collect();
+        let list = List::new(items)
+            .block(Block::bordered())
+            .bg(Color::Black)
+            .highlight_symbol("> ")
+            .highlight_style(Style::new().bg(Color::LightBlue).fg(Color::White).bold());
+        cmv.list_state.select(Some(cmv.selected));
+        frame.render_stateful_widget(list, cmv.list_area, &mut cmv.list_state);
     }
 
     fn make_status_bar(&self, area: Rc<[Rect]>, frame: &mut Frame<'_>) {
