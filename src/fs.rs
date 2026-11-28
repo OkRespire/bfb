@@ -1,16 +1,8 @@
-use std::{
-    env,
-    fs::Metadata,
-    io::ErrorKind,
-    os::unix::fs::{MetadataExt, PermissionsExt},
-    path::PathBuf,
-    str::from_utf8,
-    time::SystemTime,
-};
+use std::{env, os::unix::fs::PermissionsExt, path::PathBuf, str::from_utf8, time::SystemTime};
 
 use color_eyre::{Result, eyre::Context};
 use tokio::{
-    fs::{self, File, metadata, read_dir},
+    fs::{self, File, read_dir},
     io::AsyncReadExt,
     task,
 };

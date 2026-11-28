@@ -33,6 +33,7 @@ pub enum HitTarget {
 
 #[derive(Debug, Default)]
 pub struct ContextMenuOptions {
+    pub back: bool,
     pub open: bool,
     pub rename: bool,
     pub delete: bool,
@@ -50,12 +51,16 @@ pub enum ContextAction {
     Copy,
     Paste,
     Add,
+    Back,
 }
 
 impl ContextMenuOptions {
     pub fn visible_options(&self) -> Vec<(ContextAction, &'static str)> {
         let mut options = Vec::new();
 
+        if self.back {
+            options.push((ContextAction::Back, "Back"))
+        }
         if self.open {
             options.push((ContextAction::Open, "Open"));
         }
@@ -111,6 +116,7 @@ impl ContextMenuView {
         let paste = yanked.is_some();
         let options = match mt.target {
             HitTarget::Row(_) => ContextMenuOptions {
+                back: true,
                 open: true,
                 rename: true,
                 delete: true,
@@ -121,11 +127,15 @@ impl ContextMenuView {
                 ..Default::default()
             },
             HitTarget::Empty => ContextMenuOptions {
+                back: true,
                 paste,
                 add: true,
                 ..Default::default()
             },
-            HitTarget::HeaderClick | HitTarget::OutOfBounds => ContextMenuOptions::default(),
+            HitTarget::HeaderClick | HitTarget::OutOfBounds => ContextMenuOptions {
+                back: true,
+                ..Default::default()
+            },
         };
 
         Self {
@@ -151,11 +161,17 @@ impl ContextMenuView {
 
         tracing::debug!(?self.selected, "selected");
     }
-    pub fn selected_action(&self, curr_file: Option<FileEntry>) -> Option<Message> {
+    pub fn selected_action(
+        &self,
+        idx: Option<usize>,
+        curr_file: Option<FileEntry>,
+    ) -> Option<Message> {
+        let selected = idx.unwrap_or(self.selected);
         self.options
             .visible_options()
-            .get(self.selected)
+            .get(selected)
             .map(|(action, _)| match action {
+                ContextAction::Back => Message::GoParent,
                 ContextAction::Open => Message::Open,
                 ContextAction::Rename => curr_file
                     .map(|file| Message::RequestRename { curr_file: file })
@@ -588,23 +604,17 @@ impl App {
                 KeyCode::Esc => Some(Message::DefaultMode),
                 _ => None,
             },
-            Mode::ContextMenu(cmv) => match cmv.mt.target {
-                HitTarget::Row(_) => match (key.modifiers, key.code) {
-                    (_, KeyCode::Up | KeyCode::Char('k')) => Some(Message::MoveUp),
-                    (_, KeyCode::Down | KeyCode::Char('j')) => Some(Message::MoveDown),
-                    (_, KeyCode::Esc) => Some(Message::DefaultMode),
-                    (_, KeyCode::Enter | KeyCode::Char('l') | KeyCode::Right) => {
-                        let curr_file = self.dir_view.get_curr_file();
-                        cmv.selected_action(curr_file.cloned())
-                    }
-                    (_, KeyCode::Backspace | KeyCode::Char('h') | KeyCode::Left) => {
-                        Some(Message::DefaultMode)
-                    }
-                    _ => None,
-                },
-                HitTarget::OutOfBounds => todo!(),
-                HitTarget::HeaderClick => todo!(),
-                HitTarget::Empty => todo!(),
+            Mode::ContextMenu(cmv) => match (key.modifiers, key.code) {
+                (_, KeyCode::Up | KeyCode::Char('k')) => Some(Message::MoveUp),
+                (_, KeyCode::Down | KeyCode::Char('j')) => Some(Message::MoveDown),
+                (_, KeyCode::Enter | KeyCode::Char('l') | KeyCode::Right) => {
+                    let curr_file = self.dir_view.get_curr_file();
+                    cmv.selected_action(None, curr_file.cloned())
+                }
+                (_, KeyCode::Backspace | KeyCode::Esc | KeyCode::Char('h') | KeyCode::Left) => {
+                    Some(Message::DefaultMode)
+                }
+                _ => None,
             },
         }
     }
@@ -640,12 +650,8 @@ impl App {
             Mode::ContextMenu(cmv) => match mouse.kind {
                 MouseEventKind::Down(MouseButton::Left) => match self.cursor_loc(mouse).target {
                     HitTarget::Row(idx) => {
-                        if idx == cmv.selected {
-                            let curr_file = self.dir_view.get_curr_file();
-                            return cmv.selected_action(curr_file.cloned());
-                        } else {
-                            return Some(Message::SelectRow(idx));
-                        }
+                        let curr_file = self.dir_view.get_curr_file();
+                        return cmv.selected_action(Some(idx), curr_file.cloned());
                     }
                     HitTarget::OutOfBounds => return Some(Message::DefaultMode),
                     HitTarget::HeaderClick => return Some(Message::DefaultMode),

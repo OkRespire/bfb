@@ -4,7 +4,7 @@ use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Layout, Position, Rect},
     style::{Color, Style, Stylize},
-    widgets::{Block, Cell, Clear, List, ListItem, ListState, Paragraph, Row, Table},
+    widgets::{Block, Cell, Clear, List, ListItem, Paragraph, Row, Table},
 };
 
 const MIN: u64 = 60;
